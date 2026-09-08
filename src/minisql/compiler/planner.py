@@ -1,6 +1,19 @@
-from minisql.contracts.plans import Plan, SemanticResult
+from minisql.contracts.ast import CreateTableStmt, InsertStmt, SelectStmt
+from minisql.contracts.plans import CreateTable, Delete, Filter, Insert, Plan, Project, SemanticResult, SeqScan
 
 
 class Planner:
     def build(self, semantic: SemanticResult) -> Plan:
-        raise NotImplementedError("成员一：生成逻辑执行计划")
+        statement, schema = semantic.statement, semantic.schema
+        if isinstance(statement, CreateTableStmt):
+            return CreateTable(schema)
+        if isinstance(statement, InsertStmt):
+            values = {c.name: v.value for c, v in zip(statement.columns, statement.values)}
+            return Insert(schema, tuple(values[c.name] for c in schema.columns))
+        source = SeqScan(schema)
+        if statement.where is not None:
+            source = Filter(statement.where, source)
+        if isinstance(statement, SelectStmt):
+            columns = schema.columns if statement.columns is None else statement.columns
+            return Project(tuple(c.name for c in columns), source)
+        return Delete(schema, source)

@@ -55,9 +55,15 @@ def test_delete_plan_can_keep_record_source():
     assert isinstance(plan.source.source, SeqScan)
 
 
-def test_scaffold_never_reports_compile_success():
-    with pytest.raises(NotImplementedError):
+def test_compiler_reports_unknown_table_without_catalog_mutation():
+    with pytest.raises(MiniSQLError) as error:
         SQLCompiler().compile("SELECT * FROM student;", MemoryCatalog())
+    assert error.value.stage is ErrorStage.SEMANTIC
+    assert error.value.code == "UNKNOWN_TABLE"
+    catalog = MemoryCatalog()
+    result = SQLCompiler().compile("CREATE TABLE student (id INT);", catalog)
+    assert result.semantic.schema.name == "student"
+    assert catalog.list_tables() == ()
 
 
 def test_cli_help_and_interactive_eof(capsys, tmp_path):
@@ -69,12 +75,13 @@ def test_cli_help_and_interactive_eof(capsys, tmp_path):
     assert main(["--data-dir", str(tmp_path / "db")]) == 0
 
 
-def test_cli_file_mode_reports_unimplemented_compiler(capsys, tmp_path):
+def test_cli_file_mode_runs_real_compiler(capsys, tmp_path):
     sql_file = tmp_path / "demo.sql"
     sql_file.write_text("CREATE TABLE t(id INT);", encoding="utf-8")
-    # 编译器仍为成员一占位：CLI 如实报告尚未实现并返回退出码 2
-    assert main(["--data-dir", str(tmp_path / "db"), "--file", str(sql_file)]) == 2
-    assert "尚未实现" in capsys.readouterr().err
+    assert main(["--data-dir", str(tmp_path / "db"), "--file", str(sql_file)]) == 0
+    output = capsys.readouterr()
+    assert "表 t 已创建" in output.out
+    assert output.err == ""
 
 
 def test_all_modules_import():

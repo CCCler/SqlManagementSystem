@@ -138,8 +138,9 @@ class PlanExecutor:
             equal = left == right
             return equal if operator == "=" else not equal
         if operator in ("<", "<=", ">", ">="):
-            _require_int(left, f"{operator} 左侧")
-            _require_int(right, f"{operator} 右侧")
+            # 与语义分析和常量折叠一致：同类型比较，严格区分 BOOL/INT。
+            if type(left) is not type(right):
+                raise _execution_error("TYPE_MISMATCH", "比较需要同类型操作数")
             return {"<": left < right, "<=": left <= right, ">": left > right, ">=": left >= right}[operator]
         if operator in ("+", "-"):
             _require_int(left, f"{operator} 左侧")

@@ -139,3 +139,31 @@ def test_project_unknown_column_raises():
     with pytest.raises(MiniSQLError) as error:
         executor.execute(Project(("missing",), SeqScan(table)))
     assert error.value.code == "UNKNOWN_COLUMN"
+
+
+@pytest.mark.parametrize("operator", ["<", "<=", ">", ">="])
+@pytest.mark.parametrize("left,right,left_type,right_type", [
+    (1, "1", DataType.INT, DataType.VARCHAR),
+    (1, True, DataType.INT, DataType.BOOL),
+    ("1", False, DataType.VARCHAR, DataType.BOOL),
+])
+def test_ordering_rejects_mixed_types(operator, left, right, left_type, right_type):
+    storage = MemoryStorage()
+    executor = PlanExecutor(storage, MemoryCatalog())
+    table = storage.create_table(student_schema())
+    executor.execute(Insert(table, (1, "Alice", 20)))
+    predicate = BinaryExpr(operator, Literal(left, left_type, POS), Literal(right, right_type, POS), POS)
+    with pytest.raises(MiniSQLError) as error:
+        executor.execute(Filter(predicate, SeqScan(table)))
+    assert error.value.code == "TYPE_MISMATCH"
+
+
+@pytest.mark.parametrize("operator,expected", [("<", True), ("<=", True), (">", False), (">=", False)])
+def test_boolean_ordering_matches_compiler(operator, expected):
+    storage = MemoryStorage()
+    executor = PlanExecutor(storage, MemoryCatalog())
+    table = storage.create_table(student_schema())
+    executor.execute(Insert(table, (1, "Alice", 20)))
+    predicate = BinaryExpr(operator, Literal(False, DataType.BOOL, POS), Literal(True, DataType.BOOL, POS), POS)
+    result = executor.execute(Filter(predicate, SeqScan(table)))
+    assert result.rows == (((1, "Alice", 20),) if expected else ())
