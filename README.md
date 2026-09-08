@@ -1,8 +1,8 @@
 # MiniSQL：大型平台软件设计实习
 
-当前状态：**目录与接口骨架，尚未实现 SQL 编译、存储或执行功能。**
+当前状态：**SQL 编译、页式存储、执行引擎与 CLI 均已实现，227 项测试全部通过、零跳过。**
 
-项目根目录为 `E:\zch_Projects\sql_project`。Python 3.11+；运行时使用标准库，pytest 用于测试。
+以下命令在项目根目录执行。Python 3.11+；运行时使用标准库，pytest 用于测试。
 课程目标是贯通 SQL → Token → AST → 语义检查 → 计划 → 执行器 → 缓存/页 → 磁盘。
 不能使用 SQLite 等现成数据库代替课程要求的实现。
 
@@ -18,8 +18,29 @@ py -3 -m venv .venv
 .\.venv\Scripts\minisql.exe --version
 ```
 
-当前仅帮助和版本命令可用；执行 SQL 会显示“尚未实现”并返回退出码 2。
-业务占位方法抛出 `NotImplementedError`。跳过的验收测试不是已完成能力。
+## 运行说明
+
+交互模式（默认数据目录 `data/`，输入 `exit` 或 `quit` 退出）：
+
+```powershell
+.\.venv\Scripts\python.exe -m minisql
+.\.venv\Scripts\python.exe -m minisql --data-dir D:\my-db
+```
+
+执行 SQL 文件：
+
+```powershell
+.\.venv\Scripts\python.exe -m minisql --file examples\core.sql
+```
+
+端到端演示（core.sql 全流程 + 关闭重开持久化验证）：
+
+```powershell
+.\.venv\Scripts\python.exe examples\demo.py
+```
+
+查询结果按表格输出；错误输出到 stderr 并返回退出码 1。
+运行数据默认放在 `data/`，虚拟环境、数据、日志和缓存均被 Git 忽略。
 
 ## 文档与负责人
 
@@ -35,9 +56,10 @@ py -3 -m venv .venv
 ## 测试与协作
 
 `tests/contracts` 验证已实现的类型、测试替身和模块隔离。
-`tests/compiler`、`storage`、`engine`、`integration` 记录未实现能力，暂时显式跳过。
-启用每项前须将其失败占位体替换为实际操作与断言，不可只删除 skip 或改成空测试。
+`tests/compiler`、`storage`、`engine`、`integration` 为各模块单元与验收测试，均已启用。
+新增或修改功能时需同步更新对应测试；不以 skipped 数量证明功能完成。
 
 仓库默认分支 `main`，远程为 https://github.com/CCCler/SqlManagementSystem.git 。
-当前未提交、未拉取、未推送；负责人完成首次提交和远程同步后，各成员再从共同基线建立功能分支。
+各成员从共同基线建立功能分支（feat/compiler、feat/storage、feat/engine），
+测试与实现一起提交，经 PR 审查后合并。
 运行数据默认放 `data/`，虚拟环境、数据、日志和缓存均被 Git 忽略。
