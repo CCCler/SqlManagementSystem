@@ -60,12 +60,20 @@ def test_scaffold_never_reports_compile_success():
         SQLCompiler().compile("SELECT * FROM student;", MemoryCatalog())
 
 
-def test_cli_help_and_unimplemented_execution(capsys):
+def test_cli_help_and_interactive_eof(capsys, tmp_path):
     with pytest.raises(SystemExit) as result:
         main(["--help"])
     assert result.value.code == 0
     assert "--data-dir" in capsys.readouterr().out
-    assert main([]) == 2
+    # 存储已实现：交互模式在 stdin 不可读时按 EOF 正常退出
+    assert main(["--data-dir", str(tmp_path / "db")]) == 0
+
+
+def test_cli_file_mode_reports_unimplemented_compiler(capsys, tmp_path):
+    sql_file = tmp_path / "demo.sql"
+    sql_file.write_text("CREATE TABLE t(id INT);", encoding="utf-8")
+    # 编译器仍为成员一占位：CLI 如实报告尚未实现并返回退出码 2
+    assert main(["--data-dir", str(tmp_path / "db"), "--file", str(sql_file)]) == 2
     assert "尚未实现" in capsys.readouterr().err
 
 
