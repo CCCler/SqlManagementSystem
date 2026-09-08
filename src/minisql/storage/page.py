@@ -126,12 +126,14 @@ class DiskPageManager:
 
     def _init_meta_if_needed(self) -> None:
         data = self.files.read_at(0, self.page_size)
-        if len(data) < self.page_size:
+        if not data:
             self._write_fresh_meta_page()
             return
+        if len(data) < self.page_size:
+            raise MiniSQLError(ErrorStage.STORAGE, "CORRUPT_DATABASE", "数据库元信息页不完整，拒绝覆盖")
         meta = decode_meta(data)
         if meta.magic != META_MAGIC:
-            self._write_fresh_meta_page()
+            raise MiniSQLError(ErrorStage.STORAGE, "CORRUPT_DATABASE", "数据库魔数无效，拒绝覆盖")
 
     def _write_fresh_meta_page(self) -> None:
         """全新初始化页 0（仅新文件或 magic 无效时调用）。"""

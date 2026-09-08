@@ -9,6 +9,9 @@ dist/
 htmlcov/
 data/
 *.db
+minisql.journal
+minisql.journal.tmp
+minisql.lock
 *.log
 .idea/
 .vscode/

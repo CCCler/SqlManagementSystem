@@ -62,6 +62,11 @@ class PageBufferPool:
     def stats(self) -> CacheStats:
         return CacheStats(self._hits, self._misses, self._evictions)
 
+    def discard_page(self, page_id: int) -> None:
+        """丢弃即将释放页的缓存及脏标记，不写回已作废的数据。"""
+        self._cache.pop(page_id, None)
+        self._dirty.discard(page_id)
+
     def replacement_log(self) -> tuple[ReplacementEvent, ...]:
         return tuple(self._replacement_log)
 

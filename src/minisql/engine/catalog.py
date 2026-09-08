@@ -69,3 +69,17 @@ class PersistentCatalog:
             )
         self.storage.flush()
         self.tables[key] = replace(schema, name=key)
+
+    def unregister_table(self, name: str) -> None:
+        key = name.lower()
+        if key == "__catalog" or (key in self.tables and self.tables[key].table_id == 0):
+            raise MiniSQLError(ErrorStage.SEMANTIC, "PROTECTED_TABLE", "不能删除系统目录表")
+        schema = self.get_table(key)
+        if schema is None:
+            raise MiniSQLError(ErrorStage.SEMANTIC, "UNKNOWN_TABLE", name)
+        records = [record for record in self.storage.scan(SYSTEM_CATALOG)
+                   if record.row[0] == schema.table_id]
+        for record in records:
+            self.storage.delete(SYSTEM_CATALOG, record.record_id)
+        self.storage.flush()
+        del self.tables[key]

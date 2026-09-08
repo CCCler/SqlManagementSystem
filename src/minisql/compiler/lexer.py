@@ -2,7 +2,7 @@ from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.models import SourcePosition, Token, TokenType
 
 
-KEYWORDS = frozenset("CREATE TABLE INT VARCHAR INSERT INTO VALUES SELECT FROM WHERE DELETE TRUE FALSE NOT AND OR".split())
+KEYWORDS = frozenset("CREATE TABLE INT VARCHAR INSERT INTO VALUES SELECT FROM WHERE DELETE DROP BEGIN COMMIT ROLLBACK TRUE FALSE NOT AND OR".split())
 
 
 class Lexer:

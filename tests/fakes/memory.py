@@ -27,6 +27,14 @@ class MemoryCatalog:
             raise MiniSQLError(ErrorStage.SEMANTIC, "DUPLICATE_TABLE", key)
         self.tables[key] = replace(schema, name=key)
 
+    def unregister_table(self, name: str) -> None:
+        key = name.lower()
+        if key == "__catalog" or (key in self.tables and self.tables[key].table_id == 0):
+            raise MiniSQLError(ErrorStage.SEMANTIC, "PROTECTED_TABLE", key)
+        if key not in self.tables:
+            raise MiniSQLError(ErrorStage.SEMANTIC, "UNKNOWN_TABLE", key)
+        del self.tables[key]
+
 
 class MemoryStorage:
     """无编码、无缓存、无文件的记录接口替身；仅供执行器隔离测试。"""
@@ -55,6 +63,14 @@ class MemoryStorage:
             raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
         assert schema.table_id is not None
         return schema.table_id
+
+    def drop_table(self, schema: TableSchema) -> None:
+        table_id = self._table_id(schema)
+        if table_id == 0 or schema.name.lower() == "__catalog":
+            raise MiniSQLError(ErrorStage.STORAGE, "PROTECTED_TABLE", schema.name)
+        del self.tables[table_id]
+        del self.records[table_id]
+        del self.next_slot[table_id]
 
     def insert(self, schema: TableSchema, row: Row) -> RecordId:
         table_id = self._table_id(schema)

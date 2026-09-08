@@ -73,8 +73,8 @@ struct 格式 `>IIIi`：
 - `table_id=0` 对应 `__catalog`，用户表从 1 开始，下标连续。
 - 最大可映射表数约 `(4096 - 40) / 4 = 1014`。
 
-新文件或 magic 不匹配时，`DiskPageManager` 自动初始化为
-`magic=MSQL, next_page_id=1, next_table_id=1, free_list_head=-1`，映射区全 0。
+仅空文件由 `DiskPageManager` 自动初始化为
+`magic=MSQL, next_page_id=1, next_table_id=1, free_list_head=-1`，映射区全 0。非空但不足一页或 magic 不匹配时返回 CORRUPT_DATABASE，不覆盖原文件。
 
 ## 4. 空闲页管理
 
@@ -109,4 +109,10 @@ struct 格式 `>IIIi`：
 - 页分配信息（`next_page_id`、`free_list_head`）持久化在页 0 元信息区（DiskPageManager 维护）。
 - `next_table_id` 与 root_page 映射区持久化在页 0（HeapStorage 维护）。
 - 正常关闭后重新打开：页分配器、空闲链表、表根页映射与记录均完整恢复。
-- 第一版删除记录仅标记槽，不回收数据页（不调用 free_page）。
+- DELETE 会整理页内记录字节，回收负载空间；存活槽编号不变，中间删除槽置为 offset=0、length=0、flags 包含 SLOT_DELETED，尾部空槽移除。
+- INSERT 优先复用删除槽，无空槽时才追加槽；不承诺按插入时间扫描。全部记录删除后，slot_count=0、free_start=24、data_end=4096，页恢复完整可用容量。
+- 旧文件中保留原 offset/length 的删除槽仍可读取，页再次插入或删除时统一整理，无需迁移格式。
+- 存活 RecordId 不变，已删除 RecordId 不得继续使用，因为槽可能重用。
+- 空页不从表页链摘除，供同表复用，不主动缩小文件；DROP TABLE 释放整表页到全局空闲链表。
+
+数据库页格式保持兼容。事务额外使用 minisql.journal 完整前映像日志和 minisql.lock 操作系统锁，恢复同时覆盖元信息、空闲链表、Catalog 与数据页。具体格式及同步顺序见 [事务与恢复](事务与恢复.md)。底层存储接口独立使用时不提供事务保证。

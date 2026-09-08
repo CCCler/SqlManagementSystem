@@ -63,4 +63,16 @@ class DeleteStmt:
     position: SourcePosition
 
 
-Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt
+@dataclass(frozen=True)
+class DropTableStmt:
+    table: Identifier
+    position: SourcePosition
+
+
+@dataclass(frozen=True)
+class TransactionStmt:
+    action: str
+    position: SourcePosition
+
+
+Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | DropTableStmt | TransactionStmt

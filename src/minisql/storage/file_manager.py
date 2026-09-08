@@ -13,9 +13,9 @@ class FileManager:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
-            self._file = open(self.path, "r+b")
+            self._file = open(self.path, "r+b", buffering=0)
         else:
-            self._file = open(self.path, "w+b")
+            self._file = open(self.path, "w+b", buffering=0)
 
     def read_at(self, offset: int, size: int) -> bytes:
         self._file.seek(offset)
@@ -23,7 +23,12 @@ class FileManager:
 
     def write_at(self, offset: int, data: bytes) -> None:
         self._file.seek(offset)
-        self._file.write(data)
+        remaining = memoryview(data)
+        while remaining:
+            written = self._file.write(remaining)
+            if written is None or written <= 0:
+                raise OSError("数据库文件写入未取得进展")
+            remaining = remaining[written:]
 
     def sync(self) -> None:
         self._file.flush()

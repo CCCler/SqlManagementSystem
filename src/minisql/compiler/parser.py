@@ -1,6 +1,6 @@
 from minisql.contracts.ast import (
-    BinaryExpr, CreateTableStmt, DeleteStmt, Identifier, InsertStmt,
-    Literal, SelectStmt, Statement, UnaryExpr,
+    BinaryExpr, CreateTableStmt, DeleteStmt, DropTableStmt, Identifier, InsertStmt,
+    Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.models import ColumnSchema, DataType, SourcePosition, TableSchema, Token, TokenType
@@ -62,7 +62,9 @@ class _Parser:
 
     def statement(self):
         position = self.current.position
-        if self.matches("CREATE"):
+        if any(self.matches(word) for word in ("BEGIN", "COMMIT", "ROLLBACK")):
+            result = TransactionStmt(self.take().lexeme.upper(), position)
+        elif self.matches("CREATE"):
             self.take()
             self.expect("TABLE")
             table = self.identifier()
@@ -70,6 +72,10 @@ class _Parser:
             columns = self.separated(self.column)
             self.expect(")")
             result = CreateTableStmt(TableSchema(table.name, columns), position)
+        elif self.matches("DROP"):
+            self.take()
+            self.expect("TABLE")
+            result = DropTableStmt(self.identifier(), position)
         elif self.matches("INSERT"):
             self.take()
             self.expect("INTO")
@@ -98,7 +104,7 @@ class _Parser:
             table = self.identifier()
             result = DeleteStmt(table, self.where(), position)
         else:
-            self.error("CREATE", "INSERT", "SELECT", "DELETE")
+            self.error("CREATE", "INSERT", "SELECT", "DELETE", "DROP", "BEGIN", "COMMIT", "ROLLBACK")
         self.expect(";")
         if self.current.type is not TokenType.EOF or self.index != len(self.tokens) - 1:
             self.error("EOF")

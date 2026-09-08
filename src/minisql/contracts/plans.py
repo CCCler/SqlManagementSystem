@@ -41,13 +41,23 @@ class Delete:
     source: SeqScan | Filter  # 删除路径必须保留 RecordId，禁止 Project
 
 
-Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete
+@dataclass(frozen=True)
+class DropTable:
+    schema: TableSchema
+
+
+@dataclass(frozen=True)
+class TransactionControl:
+    action: str
+
+
+Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete | DropTable | TransactionControl
 
 
 @dataclass(frozen=True)
 class SemanticResult:
     statement: Statement
-    schema: TableSchema
+    schema: TableSchema | None  # 事务控制语句不绑定表。
     message: str = "语义检查通过"
 
 

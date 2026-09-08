@@ -151,16 +151,50 @@ class HeapStorage:
         data[:HEADER_SIZE] = encode_header(header)
         self.pages.write_page(page_id, bytes(data))
 
-    def _insert_into_page(self, page_id: int, page: bytearray, header: PageHeader, raw: bytes) -> RecordId:
-        slot_id = header.slot_count
+    def _slots(self, page: bytearray, header: PageHeader) -> list[tuple[int, int, int]]:
+        return [decode_slot(page[start:start + SLOT_SIZE])
+                for start in range(HEADER_SIZE, HEADER_SIZE + header.slot_count * SLOT_SIZE, SLOT_SIZE)]
+
+    def _compact_page(self, page_id: int, page: bytearray, header: PageHeader,
+                      deleted_slot: int | None = None) -> PageHeader:
+        """重排记录字节但不重排槽编号；旧删除标记也一并回收。"""
+        compacted = bytearray(PAGE_SIZE)
+        slots = self._slots(page, header)
+        # 仅移除尾部空槽，不移动任何存活槽；全空页恢复完整容量。
+        while slots and (len(slots) - 1 == deleted_slot or slots[-1][2] & SLOT_DELETED):
+            slots.pop()
+        free_start = HEADER_SIZE + len(slots) * SLOT_SIZE
+        end = PAGE_SIZE
+        for slot_id, (offset, length, flags) in enumerate(slots):
+            if slot_id == deleted_slot or flags & SLOT_DELETED:
+                slot = encode_slot(0, 0, flags | SLOT_DELETED)
+            else:
+                if offset < header.free_start or offset + length > PAGE_SIZE or end - length < free_start:
+                    raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "记录偏移或长度损坏")
+                end -= length
+                compacted[end:end + length] = page[offset:offset + length]
+                slot = encode_slot(end, length, flags)
+            start = HEADER_SIZE + slot_id * SLOT_SIZE
+            compacted[start:start + SLOT_SIZE] = slot
+        new_header = replace(header, slot_count=len(slots), free_start=free_start, data_end=end)
+        compacted[:HEADER_SIZE] = encode_header(new_header)
+        page[:] = compacted
+        self.buffer.mark_dirty(page_id)
+        return new_header
+
+    def _insert_into_page(self, page_id: int, page: bytearray, header: PageHeader,
+                          raw: bytes, slot_id: int | None = None) -> RecordId:
+        new_slot = slot_id is None
+        if new_slot:
+            slot_id = header.slot_count
         record_offset = header.data_end - len(raw)
         page[record_offset:record_offset + len(raw)] = raw
         slot_offset = HEADER_SIZE + slot_id * SLOT_SIZE
         page[slot_offset:slot_offset + SLOT_SIZE] = encode_slot(record_offset, len(raw), 0)
         new_header = replace(
             header,
-            slot_count=header.slot_count + 1,
-            free_start=header.free_start + SLOT_SIZE,
+            slot_count=header.slot_count + int(new_slot),
+            free_start=header.free_start + (SLOT_SIZE if new_slot else 0),
             data_end=record_offset,
         )
         page[:HEADER_SIZE] = encode_header(new_header)
@@ -193,6 +227,31 @@ class HeapStorage:
 
         return replace(schema, table_id=table_id)
 
+    def drop_table(self, schema: TableSchema) -> None:
+        table_id = self._require_table_id(schema)
+        if table_id == 0 or schema.name.lower() == "__catalog":
+            raise MiniSQLError(ErrorStage.STORAGE, "PROTECTED_TABLE", "不能删除系统目录表")
+        page_id = self._get_root_page(table_id)
+        if page_id == NO_ROOT:
+            raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
+
+        # 先验证完整页链，避免损坏链表导致重复释放；读取缓存中最新的链指针。
+        page_ids = []
+        seen = set()
+        while page_id != NO_PAGE:
+            if page_id <= 0 or page_id in seen:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页链表损坏")
+            seen.add(page_id)
+            header = decode_header(self.buffer.get_page(page_id))
+            if header.page_id != page_id or header.page_type != PAGE_TYPE_DATA:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页类型或编号错误")
+            page_ids.append(page_id)
+            page_id = header.next_data_page
+        self._set_root_page(table_id, NO_ROOT)
+        for page_id in page_ids:
+            self.buffer.discard_page(page_id)
+            self.pages.free_page(page_id)
+
     def insert(self, schema: TableSchema, row: Row) -> RecordId:
         table_id = self._require_table_id(schema)
         root_page = self._get_root_page(table_id)
@@ -207,8 +266,15 @@ class HeapStorage:
         while page_id != NO_PAGE:
             page = self.buffer.get_page(page_id)
             header = decode_header(page)
-            if header.data_end - header.free_start >= len(raw) + SLOT_SIZE:
-                return self._insert_into_page(page_id, page, header, raw)
+            slots = self._slots(page, header)
+            reusable = next((i for i, (_, _, flags) in enumerate(slots) if flags & SLOT_DELETED), None)
+            if any(length and flags & SLOT_DELETED for _, length, flags in slots):
+                header = self._compact_page(page_id, page, header)
+                if reusable is not None and reusable >= header.slot_count:
+                    reusable = None
+            required = len(raw) + (SLOT_SIZE if reusable is None else 0)
+            if header.data_end - header.free_start >= required:
+                return self._insert_into_page(page_id, page, header, raw, reusable)
 
             if header.next_data_page == NO_PAGE:
                 # 尾页满，分配新页并追加到链表尾
@@ -250,21 +316,35 @@ class HeapStorage:
 
     def delete(self, schema: TableSchema, record_id: RecordId) -> None:
         table_id = self._require_table_id(schema)
-        if self._get_root_page(table_id) == NO_ROOT:
+        root_page = self._get_root_page(table_id)
+        if root_page == NO_ROOT:
             raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
+        if record_id.page_id <= 0 or record_id.slot_id < 0:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
 
-        page = self.buffer.get_page(record_id.page_id)
-        header = decode_header(page)
+        # RecordId 必须属于目标表，不能压缩或删除其他表的数据页。
+        page_id = root_page
+        seen = set()
+        while page_id != NO_PAGE:
+            if page_id <= 0 or page_id in seen:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页链表损坏")
+            seen.add(page_id)
+            page = self.buffer.get_page(page_id)
+            header = decode_header(page)
+            if header.page_id != page_id or header.page_type != PAGE_TYPE_DATA:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页类型或编号错误")
+            if page_id == record_id.page_id:
+                break
+            page_id = header.next_data_page
+        else:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
         if record_id.slot_id >= header.slot_count:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
-
         slot_offset = HEADER_SIZE + record_id.slot_id * SLOT_SIZE
-        offset, length, flags = decode_slot(page[slot_offset:slot_offset + SLOT_SIZE])
+        _, _, flags = decode_slot(page[slot_offset:slot_offset + SLOT_SIZE])
         if flags & SLOT_DELETED:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
-
-        page[slot_offset:slot_offset + SLOT_SIZE] = encode_slot(offset, length, flags | SLOT_DELETED)
-        self.buffer.mark_dirty(record_id.page_id)
+        self._compact_page(record_id.page_id, page, header, record_id.slot_id)
 
     def flush(self) -> None:
         self.buffer.flush_all()

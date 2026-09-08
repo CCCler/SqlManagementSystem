@@ -1,6 +1,6 @@
 from dataclasses import replace
 from minisql.contracts.ast import (
-    CreateTableStmt, Identifier, InsertStmt, Literal, SelectStmt, Statement, UnaryExpr,
+    CreateTableStmt, DropTableStmt, Identifier, InsertStmt, Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogReader
@@ -10,6 +10,8 @@ from minisql.contracts.plans import SemanticResult
 
 class SemanticAnalyzer:
     def analyze(self, statement: Statement, catalog: CatalogReader) -> SemanticResult:
+        if isinstance(statement, TransactionStmt):
+            return SemanticResult(statement, None)
         def fail(code, reason, position=statement.position):
             raise MiniSQLError(ErrorStage.SEMANTIC, code, reason, position)
 
@@ -34,10 +36,16 @@ class SemanticAnalyzer:
             return SemanticResult(replace(statement, schema=schema), schema)
 
         table = identifier(statement.table)
+        if isinstance(statement, DropTableStmt) and table.name == "__catalog":
+            fail("PROTECTED_TABLE", "不能删除系统目录表", table.position)
         schema = catalog.get_table(table.name)
         if schema is None:
             fail("UNKNOWN_TABLE", f"未知表：{table.name}", table.position)
         schema = normalize_schema(schema)
+        if isinstance(statement, DropTableStmt):
+            if schema.table_id == 0:
+                fail("PROTECTED_TABLE", "不能删除系统目录表", table.position)
+            return SemanticResult(replace(statement, table=table), schema)
         column_types = {c.name: c.data_type for c in schema.columns}
 
         def column(node):

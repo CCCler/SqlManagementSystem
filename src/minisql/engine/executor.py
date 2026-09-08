@@ -7,7 +7,7 @@ from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogWriter, RecordStorage
 from minisql.contracts.models import ExecutionResult, Row, StoredRecord, Value
 from minisql.contracts.plans import (
-    CreateTable, Delete, Filter, Insert, Plan, Project, QueryPlan, SeqScan,
+    CreateTable, Delete, DropTable, Filter, Insert, Plan, Project, QueryPlan, SeqScan,
 )
 
 
@@ -39,6 +39,8 @@ class PlanExecutor:
     def execute(self, plan: Plan) -> ExecutionResult:
         if isinstance(plan, CreateTable):
             return self._create_table(plan)
+        if isinstance(plan, DropTable):
+            return self._drop_table(plan)
         if isinstance(plan, Insert):
             return self._insert(plan)
         if isinstance(plan, Delete):
@@ -59,6 +61,18 @@ class PlanExecutor:
         self.storage.insert(plan.schema, plan.values)
         self.storage.flush()
         return ExecutionResult(affected_rows=1, message="已插入 1 行")
+
+    def _drop_table(self, plan: DropTable) -> ExecutionResult:
+        if plan.schema.table_id == 0 or plan.schema.name.lower() == "__catalog":
+            raise _execution_error("PROTECTED_TABLE", "不能删除系统目录表")
+        # 防止旧计划误删同名重建后的新表。
+        current = self.catalog.get_table(plan.schema.name)
+        if current is None or current.table_id != plan.schema.table_id:
+            raise _execution_error("UNKNOWN_TABLE", plan.schema.name)
+        self.storage.drop_table(current)
+        self.catalog.unregister_table(current.name)
+        self.storage.flush()
+        return ExecutionResult(message=f"表 {current.name} 已删除")
 
     def _delete(self, plan: Delete) -> ExecutionResult:
         if not isinstance(plan.source, (SeqScan, Filter)):
