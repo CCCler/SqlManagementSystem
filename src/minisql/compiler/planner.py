@@ -1,5 +1,5 @@
-from minisql.contracts.ast import CreateTableStmt, DropTableStmt, InsertStmt, SelectStmt, TransactionStmt
-from minisql.contracts.plans import CreateTable, Delete, DropTable, Filter, Insert, Plan, Project, SemanticResult, SeqScan, TransactionControl
+from minisql.contracts.ast import CreateTableStmt, DropTableStmt, ExplainStmt, InsertStmt, SelectStmt, TransactionStmt
+from minisql.contracts.plans import CreateTable, Delete, DropTable, Explain, Filter, Insert, Plan, Project, SemanticResult, SeqScan, TransactionControl
 
 
 class Planner:
@@ -7,6 +7,8 @@ class Planner:
         statement, schema = semantic.statement, semantic.schema
         if isinstance(statement, TransactionStmt):
             return TransactionControl(statement.action)
+        if isinstance(statement, ExplainStmt):
+            return Explain(self.build(SemanticResult(statement.statement, schema)))
         if isinstance(statement, CreateTableStmt):
             return CreateTable(schema)
         if isinstance(statement, DropTableStmt):
@@ -19,5 +21,5 @@ class Planner:
             source = Filter(statement.where, source)
         if isinstance(statement, SelectStmt):
             columns = schema.columns if statement.columns is None else statement.columns
-            return Project(tuple(c.name for c in columns), source)
+            return Project(tuple(c.name for c in columns), source, statement.distinct, statement.limit)
         return Delete(schema, source)

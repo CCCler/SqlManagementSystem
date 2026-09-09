@@ -167,3 +167,28 @@ def test_boolean_ordering_matches_compiler(operator, expected):
     predicate = BinaryExpr(operator, Literal(False, DataType.BOOL, POS), Literal(True, DataType.BOOL, POS), POS)
     result = executor.execute(Filter(predicate, SeqScan(table)))
     assert result.rows == (((1, "Alice", 20),) if expected else ())
+
+
+def test_arithmetic_overflow_raises_execution_error():
+    storage = MemoryStorage()
+    executor = PlanExecutor(storage, MemoryCatalog())
+    table = storage.create_table(TableSchema("ids", (ColumnSchema("id", DataType.INT),)))
+    executor.execute(Insert(table, (2 ** 63 - 1,)))
+    overflow = BinaryExpr(
+        "=", BinaryExpr("+", Identifier("id", POS), Literal(1, DataType.INT, POS), POS),
+        Literal(0, DataType.INT, POS), POS)
+    with pytest.raises(MiniSQLError) as error:
+        executor.execute(Filter(overflow, SeqScan(table)))
+    assert error.value.stage is ErrorStage.EXECUTION
+    assert error.value.code == "INTEGER_OUT_OF_RANGE"
+
+
+def test_arithmetic_within_bounds_matches():
+    storage = MemoryStorage()
+    executor = PlanExecutor(storage, MemoryCatalog())
+    table = storage.create_table(TableSchema("ids", (ColumnSchema("id", DataType.INT),)))
+    executor.execute(Insert(table, (0,)))
+    within = BinaryExpr(
+        "=", BinaryExpr("+", Identifier("id", POS), Literal(2 ** 63 - 1, DataType.INT, POS), POS),
+        Literal(2 ** 63 - 1, DataType.INT, POS), POS)
+    assert executor.execute(Filter(within, SeqScan(table))).rows == ((0,),)

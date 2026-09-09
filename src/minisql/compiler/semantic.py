@@ -1,6 +1,6 @@
 from dataclasses import replace
 from minisql.contracts.ast import (
-    CreateTableStmt, DropTableStmt, Identifier, InsertStmt, Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
+    CreateTableStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt, Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogReader
@@ -12,6 +12,9 @@ class SemanticAnalyzer:
     def analyze(self, statement: Statement, catalog: CatalogReader) -> SemanticResult:
         if isinstance(statement, TransactionStmt):
             return SemanticResult(statement, None)
+        if isinstance(statement, ExplainStmt):
+            inner = self.analyze(statement.statement, catalog)
+            return SemanticResult(replace(statement, statement=inner.statement), inner.schema)
         def fail(code, reason, position=statement.position):
             raise MiniSQLError(ErrorStage.SEMANTIC, code, reason, position)
 

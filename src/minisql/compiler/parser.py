@@ -1,5 +1,5 @@
 from minisql.contracts.ast import (
-    BinaryExpr, CreateTableStmt, DeleteStmt, DropTableStmt, Identifier, InsertStmt,
+    BinaryExpr, CreateTableStmt, DeleteStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt,
     Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
@@ -92,26 +92,57 @@ class _Parser:
             self.expect(")")
             result = InsertStmt(table, columns, values, position)
         elif self.matches("SELECT"):
-            self.take()
-            if self.matches("*"):
-                self.take()
-                columns = None
-            else:
-                columns = self.separated(self.identifier)
-            self.expect("FROM")
-            table = self.identifier()
-            result = SelectStmt(table, columns, self.where(), position)
+            result = self.select_body(position)
         elif self.matches("DELETE"):
+            result = self.delete_body(position)
+        elif self.matches("EXPLAIN"):
             self.take()
-            self.expect("FROM")
-            table = self.identifier()
-            result = DeleteStmt(table, self.where(), position)
+            result = ExplainStmt(self.explain_target(), position)
         else:
-            self.error("CREATE", "INSERT", "SELECT", "DELETE", "DROP", "BEGIN", "COMMIT", "ROLLBACK")
+            self.error("CREATE", "INSERT", "SELECT", "DELETE", "DROP", "EXPLAIN", "BEGIN", "COMMIT", "ROLLBACK")
         self.expect(";")
         if self.current.type is not TokenType.EOF or self.index != len(self.tokens) - 1:
             self.error("EOF")
         return result
+
+    def select_body(self, position):
+        self.take()  # SELECT
+        distinct = False
+        if self.matches("DISTINCT"):
+            self.take()
+            distinct = True
+        if self.matches("*"):
+            self.take()
+            columns = None
+        else:
+            columns = self.separated(self.identifier)
+        self.expect("FROM")
+        table = self.identifier()
+        return SelectStmt(table, columns, self.where(), position, distinct, self.limit_clause())
+
+    def delete_body(self, position):
+        self.take()  # DELETE
+        self.expect("FROM")
+        table = self.identifier()
+        return DeleteStmt(table, self.where(), position)
+
+    def explain_target(self):
+        if self.matches("SELECT"):
+            return self.select_body(self.current.position)
+        if self.matches("DELETE"):
+            return self.delete_body(self.current.position)
+        self.error("SELECT", "DELETE")
+
+    def limit_clause(self):
+        if self.matches("LIMIT"):
+            self.take()
+            token = self.current
+            if token.type is TokenType.CONST and token.lexeme.isascii() and token.lexeme.isdigit():
+                self.take()
+                digits = token.lexeme.lstrip("0") or "0"
+                return int(digits) if len(digits) <= 19 else 2 ** 63
+            self.error("INTEGER")
+        return None
 
     def where(self):
         if self.matches("WHERE"):

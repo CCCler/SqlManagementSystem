@@ -30,6 +30,8 @@ class Filter:
 class Project:
     columns: tuple[str, ...]
     source: "QueryPlan"
+    distinct: bool = False
+    limit: int | None = None
 
 
 QueryPlan: TypeAlias = SeqScan | Filter | Project
@@ -51,7 +53,12 @@ class TransactionControl:
     action: str
 
 
-Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete | DropTable | TransactionControl
+@dataclass(frozen=True)
+class Explain:
+    plan: "Plan"
+
+
+Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete | DropTable | TransactionControl | Explain
 
 
 @dataclass(frozen=True)

@@ -54,6 +54,8 @@ class SelectStmt:
     columns: tuple[Identifier, ...] | None  # None 表示 *
     where: Expression | None
     position: SourcePosition
+    distinct: bool = False
+    limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,4 +77,10 @@ class TransactionStmt:
     position: SourcePosition
 
 
-Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | DropTableStmt | TransactionStmt
+@dataclass(frozen=True)
+class ExplainStmt:
+    statement: "Statement"
+    position: SourcePosition
+
+
+Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | DropTableStmt | TransactionStmt | ExplainStmt

@@ -1,14 +1,19 @@
-"""PlanExecutor：执行 CreateTable/Insert/SeqScan/Filter/Project/Delete 计划。
+"""PlanExecutor：执行 CreateTable/Insert/SeqScan/Filter/Project/Delete/Explain 计划。
 
 SeqScan/Filter 保留 StoredRecord 的 RecordId；SELECT 的 Project 产生结果列；
-DELETE 只接收扫描或过滤结果，禁止 Project 以保留 RecordId。"""
+DELETE 只接收扫描或过滤结果，禁止 Project 以保留 RecordId；
+EXPLAIN 仅渲染计划树，不扫描、不修改数据。"""
 from minisql.contracts.ast import BinaryExpr, Expression, Identifier, Literal, UnaryExpr
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogWriter, RecordStorage
 from minisql.contracts.models import ExecutionResult, Row, StoredRecord, Value
 from minisql.contracts.plans import (
-    CreateTable, Delete, DropTable, Filter, Insert, Plan, Project, QueryPlan, SeqScan,
+    CreateTable, Delete, DropTable, Explain, Filter, Insert, Plan, Project, QueryPlan,
+    SeqScan, TransactionControl,
 )
+
+INT_MIN = -(2 ** 63)
+INT_MAX = 2 ** 63 - 1
 
 
 def _execution_error(code: str, reason: str) -> MiniSQLError:
@@ -31,12 +36,59 @@ def _query_columns(plan: QueryPlan) -> tuple[str, ...]:
     raise _execution_error("UNKNOWN_PLAN", f"未知查询计划: {type(plan).__name__}")
 
 
+def _render_expr(expression: Expression) -> str:
+    if isinstance(expression, Literal):
+        value = expression.value
+        return "'" + value.replace("'", "''") + "'" if isinstance(value, str) else repr(value)
+    if isinstance(expression, Identifier):
+        return expression.name
+    if isinstance(expression, UnaryExpr):
+        return f"({expression.operator} {_render_expr(expression.operand)})"
+    if isinstance(expression, BinaryExpr):
+        return f"({_render_expr(expression.left)} {expression.operator} {_render_expr(expression.right)})"
+    return str(expression)
+
+
+def _indent(text: str) -> str:
+    return "\n".join("  " + line for line in text.split("\n"))
+
+
+def render_plan(plan: Plan) -> str:
+    """把计划渲染为可读的缩进树；供 EXPLAIN 只读展示，不执行任何算子。"""
+    if isinstance(plan, Explain):
+        return render_plan(plan.plan)
+    if isinstance(plan, SeqScan):
+        return f"SeqScan({plan.schema.name})"
+    if isinstance(plan, Filter):
+        return f"Filter({_render_expr(plan.predicate)})\n" + _indent(render_plan(plan.source))
+    if isinstance(plan, Project):
+        line = f"Project({', '.join(plan.columns)})"
+        if plan.distinct:
+            line += " DISTINCT"
+        if plan.limit is not None:
+            line += f" LIMIT {plan.limit}"
+        return line + "\n" + _indent(render_plan(plan.source))
+    if isinstance(plan, Delete):
+        return f"Delete({plan.schema.name})\n" + _indent(render_plan(plan.source))
+    if isinstance(plan, CreateTable):
+        return f"CreateTable({plan.schema.name})"
+    if isinstance(plan, Insert):
+        return f"Insert({plan.schema.name})"
+    if isinstance(plan, DropTable):
+        return f"DropTable({plan.schema.name})"
+    if isinstance(plan, TransactionControl):
+        return f"TransactionControl({plan.action})"
+    return str(plan)
+
+
 class PlanExecutor:
     def __init__(self, storage: RecordStorage, catalog: CatalogWriter) -> None:
         self.storage = storage
         self.catalog = catalog
 
     def execute(self, plan: Plan) -> ExecutionResult:
+        if isinstance(plan, Explain):
+            return ExecutionResult(message=render_plan(plan.plan))
         if isinstance(plan, CreateTable):
             return self._create_table(plan)
         if isinstance(plan, DropTable):
@@ -95,6 +147,16 @@ class PlanExecutor:
             projected: list[Row] = [
                 tuple(row[indexes[column]] for column in plan.columns) for row in source_rows
             ]
+            if plan.distinct:
+                seen: set[Row] = set()
+                deduped: list[Row] = []
+                for row in projected:
+                    if row not in seen:
+                        seen.add(row)
+                        deduped.append(row)
+                projected = deduped
+            if plan.limit is not None:
+                projected = projected[:plan.limit]
             return plan.columns, projected
         columns = _query_columns(plan)
         return columns, [record.row for record in self._scan_records(plan)]
@@ -159,5 +221,8 @@ class PlanExecutor:
         if operator in ("+", "-"):
             _require_int(left, f"{operator} 左侧")
             _require_int(right, f"{operator} 右侧")
-            return left + right if operator == "+" else left - right
+            result = left + right if operator == "+" else left - right
+            if not (INT_MIN <= result <= INT_MAX):
+                raise _execution_error("INTEGER_OUT_OF_RANGE", f"{operator} 运算结果超出 64 位有符号整数范围")
+            return result
         raise _execution_error("UNKNOWN_PLAN", f"未知二元运算符: {operator}")

@@ -2,7 +2,7 @@ from dataclasses import replace
 import operator
 from minisql.contracts.ast import BinaryExpr, Literal, UnaryExpr
 from minisql.contracts.models import DataType
-from minisql.contracts.plans import Delete, Filter, Plan, Project
+from minisql.contracts.plans import Delete, Explain, Filter, Plan, Project
 
 
 OPERATIONS = {
@@ -15,6 +15,8 @@ OPERATIONS = {
 
 class Optimizer:
     def optimize(self, plan: Plan) -> Plan:
+        if isinstance(plan, Explain):
+            return replace(plan, plan=self.optimize(plan.plan))
         if isinstance(plan, Filter):
             return replace(plan, predicate=_fold(plan.predicate), source=self.optimize(plan.source))
         if isinstance(plan, (Project, Delete)):
