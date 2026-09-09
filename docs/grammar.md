@@ -5,16 +5,17 @@
 字符串使用单引号，两个连续单引号表示一个单引号；支持 -- 行注释与 /* */ 非嵌套注释。
 
 ```ebnf
-statement   = create | insert | select | delete | drop | transaction ;
+statement   = create | insert | select | delete | drop | transaction | explain ;
 transaction = ( "BEGIN" | "COMMIT" | "ROLLBACK" ) ";" ;
 drop        = "DROP" "TABLE" identifier ";" ;
 create      = "CREATE" "TABLE" identifier "(" column { "," column } ")" ";" ;
 column      = identifier ( "INT" | "VARCHAR" ) ;
 insert      = "INSERT" "INTO" identifier "(" identifier { "," identifier } ")"
               "VALUES" "(" literal { "," literal } ")" ";" ;
-select      = "SELECT" ( "*" | identifier { "," identifier } )
-              "FROM" identifier [ "WHERE" expression ] ";" ;
+select      = "SELECT" [ "DISTINCT" ] ( "*" | identifier { "," identifier } )
+              "FROM" identifier [ "WHERE" expression ] [ "LIMIT" integer ] ";" ;
 delete      = "DELETE" "FROM" identifier [ "WHERE" expression ] ";" ;
+explain     = "EXPLAIN" ( select | delete ) ";" ;
 expression  = or_expr ;
 or_expr     = and_expr { "OR" and_expr } ;
 and_expr    = not_expr { "AND" not_expr } ;
@@ -33,6 +34,10 @@ NOT a = 1 解析成 NOT (a = 1)，优先级为算术加减 > 比较 > NOT > AND 
 TRUE/FALSE 及整数加减用于验证布尔化简与常量折叠；不增加 BOOL 表列类型。
 WHERE 必须为 BOOL；不支持连续比较 a < b < c，不支持 NULL、JOIN、UPDATE、浮点数或 VARCHAR(n)。
 INSERT 必须列出全部表列，不允许重复，允许重排；缺分号必须报语法错误。
+
+SELECT 可选 DISTINCT 去重与 LIMIT 截断；DISTINCT 在投影后执行、先于 LIMIT，LIMIT 后必须是非负整数字面量。
+EXPLAIN 只编译不执行，仅渲染优化后的计划树；语义检查仍先执行，未知表/列与类型错误照常报告。
+运行时加减运算结果超出有符号 64 位范围时报 EXECUTION:INTEGER_OUT_OF_RANGE，与语义分析及常量折叠一致。
 
 DROP TABLE 删除表结构及全部记录，释放整表数据页；不存在的表报 UNKNOWN_TABLE，系统目录表报 PROTECTED_TABLE。
 当前不支持 IF EXISTS、一次删除多表或 CASCADE。DROP 新增为保留关键字，不可再用作未加引号的标识符。
