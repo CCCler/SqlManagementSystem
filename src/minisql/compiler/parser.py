@@ -6,6 +6,9 @@ from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.models import ColumnSchema, DataType, SourcePosition, TableSchema, Token, TokenType
 
 
+MAX_EXPRESSION_COMPLEXITY = 64
+
+
 class Parser:
     def parse(self, tokens: tuple[Token, ...]) -> Statement:
         if not tokens or tokens[-1].type is not TokenType.EOF:
@@ -113,6 +116,19 @@ class _Parser:
     def where(self):
         if self.matches("WHERE"):
             self.take()
+            # 在任何递归前预算结构量，同时约束括号、NOT 及左深二元表达式树。
+            # 只计结构 Token，字符串内容和标识符长度不计入。
+            complexity = 0
+            for token in self.tokens[self.index:]:
+                if (token.type is TokenType.OPERATOR or
+                        token.type is TokenType.DELIMITER and token.lexeme == "(" or
+                        token.type is TokenType.KEYWORD and token.lexeme.upper() in ("NOT", "AND", "OR")):
+                    complexity += 1
+                    if complexity > MAX_EXPRESSION_COMPLEXITY:
+                        raise MiniSQLError(
+                            ErrorStage.SYNTAX, "EXPRESSION_TOO_COMPLEX",
+                            f"WHERE 表达式的左括号与运算符总数最多为 {MAX_EXPRESSION_COMPLEXITY}，请简化表达式",
+                            token.position, ("SIMPLER_EXPRESSION",))
             return self.or_expr()
         return None
 

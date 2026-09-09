@@ -38,3 +38,5 @@ DROP TABLE 删除表结构及全部记录，释放整表数据页；不存在的
 当前不支持 IF EXISTS、一次删除多表或 CASCADE。DROP 新增为保留关键字，不可再用作未加引号的标识符。
 
 BEGIN、COMMIT、ROLLBACK 为保留关键字，不可用作标识符。事务控制同样要求分号，不支持 BEGIN TRANSACTION、嵌套事务或 SAVEPOINT。
+
+实现限制：每条 WHERE 中左括号、NOT/AND/OR、比较及加减运算符总数最多 64（负数字面量的减号也计入）；字符串和注释内容不计入。第 65 个结构 Token 报带位置的 EXPRESSION_TOO_COMPLEX，限制在递归解析前检查。

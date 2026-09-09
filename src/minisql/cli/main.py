@@ -8,6 +8,7 @@ from minisql.compiler.statements import scan_statements
 from minisql.contracts.errors import MiniSQLError
 from minisql.contracts.models import ExecutionResult
 from minisql.engine.database import open_database
+from minisql.cli.trace import TracingCompiler, emit_event, to_json_value
 
 
 def render_result(result: ExecutionResult) -> str:
@@ -27,7 +28,14 @@ def render_result(result: ExecutionResult) -> str:
     return "\n".join(lines)
 
 
-def _run_file(database, path: Path) -> int:
+def _print_result(result, trace):
+    if trace:
+        emit_event("execution", result=to_json_value(result))
+    else:
+        print(render_result(result))
+
+
+def _run_file(database, path: Path, trace: bool = False) -> int:
     try:
         sql = path.read_text(encoding="utf-8")
     except OSError as error:
@@ -42,12 +50,12 @@ def _run_file(database, path: Path) -> int:
         print(f"错误: {error}", file=sys.stderr)
         return 1
     for result in results:
-        print(render_result(result))
+        _print_result(result, trace)
     return 0
 
 
-def _run_interactive(database) -> int:
-    interactive = sys.stdin.isatty()
+def _run_interactive(database, trace: bool = False) -> int:
+    interactive = sys.stdin.isatty() and not trace
     buffer = ""
 
     def finish() -> int:
@@ -67,7 +75,7 @@ def _run_interactive(database) -> int:
         except (EOFError, OSError):
             return finish()
         except KeyboardInterrupt:
-            print()
+            print(file=sys.stderr if trace else sys.stdout)
             if pending.has_pending:
                 print("已取消未完成的 SQL 输入。", file=sys.stderr)
                 buffer = ""
@@ -95,7 +103,7 @@ def _run_interactive(database) -> int:
             buffer = ""  # 同一批输入遇错后不继续执行其残缺尾部。
             continue
         for result in results:
-            print(render_result(result))
+            _print_result(result, trace)
         if not scan_statements(buffer).has_pending:
             buffer = ""
 
@@ -104,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MiniSQL 教学数据库")
     parser.add_argument("--data-dir", type=Path, default=Path("data"), help="数据库目录")
     parser.add_argument("--file", type=Path, help="执行 SQL 文件；省略时进入交互模式")
+    parser.add_argument("--trace", action="store_true", help="执行 SQL 并以 JSON Lines 输出全部编译阶段及结果")
     parser.add_argument("--lock-timeout", type=float, help="数据库锁等待秒数，默认 5 秒")
     parser.add_argument("--version", action="version", version="minisql 0.1.0")
     args = parser.parse_args(argv)
@@ -122,10 +131,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"无法打开数据库目录: {error}", file=sys.stderr)
         return 1
     try:
+        if args.trace:
+            database.compiler = TracingCompiler(database.compiler)
         if args.file is not None:
-            result = _run_file(database, args.file)
+            result = _run_file(database, args.file, args.trace)
         else:
-            result = _run_interactive(database)
+            result = _run_interactive(database, args.trace)
         if getattr(database, "in_transaction", False):
             database.rollback()
             print("退出时存在未提交事务，已回滚。", file=sys.stderr)

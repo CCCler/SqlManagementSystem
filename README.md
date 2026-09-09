@@ -1,6 +1,6 @@
 # MiniSQL：大型平台软件设计实习
 
-当前状态（2026-09-09，包含 DROP TABLE、交互输入完善、删除空间回收及事务恢复）：**SQL 编译器、页式存储、执行引擎和命令行已实现，核心流程、事务、并发访问及进程崩溃恢复已通过验证。** 最近全套测试为 **325 项通过，无失败、无跳过**；报告与部分边界完善工作仍待完成。
+当前状态（2026-09-09，包含 DROP TABLE、交互输入完善、删除空间回收及事务恢复）：**SQL 编译器、页式存储、执行引擎和命令行已实现，核心流程、事务、并发访问及进程崩溃恢复已通过验证。** 最近全套测试为 **354 项通过，无失败、无跳过**；报告与部分边界完善工作仍待完成。
 
 以下命令在项目根目录执行。Python 3.11+；运行时使用标准库，pytest 用于测试。
 课程目标是贯通 SQL → Token → AST → 语义检查 → 计划 → 执行器 → 缓存/页 → 磁盘。
@@ -102,6 +102,20 @@ DROP TABLE student;
 `DELETE FROM student;` 只删除记录、保留表；`DROP TABLE student;` 删除整张表，之后可以同名重建。
 删表结果在关闭重启后保持，整表数据页会释放供后续复用；不存在的表会报错，系统表 `__catalog` 不允许删除。
 当前不支持 `DROP TABLE IF EXISTS`。已有数据库若曾使用 `drop` 作为表名或列名，需要注意 DROP 现为保留关键字。
+
+## 编译跟踪与缓存实验
+
+```powershell
+# 执行示例并输出 Token、AST、语义结果、优化前后计划（JSON Lines）
+.\.venv\Scripts\python.exe -m minisql --data-dir .\data\trace-demo --file .\examples\trace.sql --trace
+
+# 比较不同容量下的 LRU/FIFO，输出命中、淘汰、脏页写回和替换日志
+.\.venv\Scripts\python.exe -m minisql.cli.cache_experiment --capacities 2 3 4 --rounds 3
+```
+
+`--trace` 会执行 SQL；示例使用事务并在最后回滚。缓存实验使用独立临时页文件，分别测量持续缓存和每轮重建缓存，不代表 SQL 事务吞吐量。
+WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRESSION_TOO_COMPLEX`，避免深层表达式造成递归溢出。
+完整字段、统计口径和可手算的验证序列见 [编译跟踪与缓存实验](docs/编译跟踪与缓存实验.md)。
 
 ## 已实现能力与限制
 

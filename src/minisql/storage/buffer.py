@@ -26,6 +26,7 @@ class PageBufferPool:
         self._hits = 0
         self._misses = 0
         self._evictions = 0
+        self._writebacks = 0
         self._replacement_log: list[ReplacementEvent] = []
 
     def get_page(self, page_id: int) -> bytearray:
@@ -53,6 +54,7 @@ class PageBufferPool:
     def flush_page(self, page_id: int) -> None:
         if page_id in self._dirty:
             self.pages.write_page(page_id, bytes(self._cache[page_id]))
+            self._writebacks += 1
             self._dirty.discard(page_id)
 
     def flush_all(self) -> None:
@@ -61,6 +63,11 @@ class PageBufferPool:
 
     def stats(self) -> CacheStats:
         return CacheStats(self._hits, self._misses, self._evictions)
+
+    @property
+    def writebacks(self) -> int:
+        """成功写回的脏页次数，包含主动刷新及淘汰，不等同于 fsync 次数。"""
+        return self._writebacks
 
     def discard_page(self, page_id: int) -> None:
         """丢弃即将释放页的缓存及脏标记，不写回已作废的数据。"""
@@ -71,10 +78,13 @@ class PageBufferPool:
         return tuple(self._replacement_log)
 
     def _evict_one(self) -> None:
-        victim, page = self._cache.popitem(last=False)
+        victim = next(iter(self._cache))
+        page = self._cache[victim]
         dirty = victim in self._dirty
         if dirty:
             self.pages.write_page(victim, bytes(page))
+            self._writebacks += 1
             self._dirty.discard(victim)
+        del self._cache[victim]  # 写回失败时保留脏页，允许调用者重试。
         self._evictions += 1
         self._replacement_log.append(ReplacementEvent(victim, dirty, self.policy))
