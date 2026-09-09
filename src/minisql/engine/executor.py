@@ -8,8 +8,8 @@ from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogWriter, RecordStorage
 from minisql.contracts.models import ExecutionResult, Row, StoredRecord, Value
 from minisql.contracts.plans import (
-    CreateTable, Delete, DropTable, Explain, Filter, Insert, Plan, Project, QueryPlan,
-    SeqScan, TransactionControl,
+    CreateTable, Delete, DropTable, EmptyScan, Explain, Filter, Insert, Plan, Project,
+    QueryPlan, SeqScan, TransactionControl,
 )
 
 INT_MIN = -(2 ** 63)
@@ -31,7 +31,7 @@ def _query_columns(plan: QueryPlan) -> tuple[str, ...]:
         return tuple(column.name for column in plan.schema.columns)
     if isinstance(plan, Filter):
         return _query_columns(plan.source)
-    if isinstance(plan, Project):
+    if isinstance(plan, (Project, EmptyScan)):
         return plan.columns
     raise _execution_error("UNKNOWN_PLAN", f"未知查询计划: {type(plan).__name__}")
 
@@ -59,6 +59,8 @@ def render_plan(plan: Plan) -> str:
         return render_plan(plan.plan)
     if isinstance(plan, SeqScan):
         return f"SeqScan({plan.schema.name})"
+    if isinstance(plan, EmptyScan):
+        return f"EmptyScan({', '.join(plan.columns)})"
     if isinstance(plan, Filter):
         return f"Filter({_render_expr(plan.predicate)})\n" + _indent(render_plan(plan.source))
     if isinstance(plan, Project):
@@ -97,7 +99,7 @@ class PlanExecutor:
             return self._insert(plan)
         if isinstance(plan, Delete):
             return self._delete(plan)
-        if isinstance(plan, (SeqScan, Filter, Project)):
+        if isinstance(plan, (SeqScan, Filter, Project, EmptyScan)):
             columns, rows = self._run_query(plan)
             return ExecutionResult(columns=columns, rows=tuple(rows))
         raise _execution_error("UNKNOWN_PLAN", f"不支持的计划类型: {type(plan).__name__}")
@@ -127,8 +129,8 @@ class PlanExecutor:
         return ExecutionResult(message=f"表 {current.name} 已删除")
 
     def _delete(self, plan: Delete) -> ExecutionResult:
-        if not isinstance(plan.source, (SeqScan, Filter)):
-            raise _execution_error("UNKNOWN_PLAN", "DELETE 只允许 SeqScan/Filter 源以保留 RecordId")
+        if not isinstance(plan.source, (SeqScan, Filter, EmptyScan)):
+            raise _execution_error("UNKNOWN_PLAN", "DELETE 只允许 SeqScan/Filter/EmptyScan 源以保留 RecordId")
         count = 0
         for record in self._scan_records(plan.source):
             self.storage.delete(plan.schema, record.record_id)
@@ -137,6 +139,9 @@ class PlanExecutor:
         return ExecutionResult(affected_rows=count, message=f"已删除 {count} 行")
 
     def _run_query(self, plan: QueryPlan) -> tuple[tuple[str, ...], list[Row]]:
+        if isinstance(plan, EmptyScan):
+            # 恒假条件：返回正确列名与零行，不访问存储。
+            return plan.columns, []
         if isinstance(plan, Project):
             source_columns, source_rows = self._run_query(plan.source)
             indexes = {name: index for index, name in enumerate(source_columns)}
@@ -161,9 +166,11 @@ class PlanExecutor:
         columns = _query_columns(plan)
         return columns, [record.row for record in self._scan_records(plan)]
 
-    def _scan_records(self, plan: SeqScan | Filter) -> list[StoredRecord]:
+    def _scan_records(self, plan: SeqScan | Filter | EmptyScan) -> list[StoredRecord]:
         if isinstance(plan, SeqScan):
             return list(self.storage.scan(plan.schema))
+        if isinstance(plan, EmptyScan):
+            return []
         if isinstance(plan, Filter):
             indexes = {name: index for index, name in enumerate(_query_columns(plan.source))}
             kept: list[StoredRecord] = []

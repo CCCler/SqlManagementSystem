@@ -13,7 +13,7 @@ from minisql.contracts.ast import (
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.models import ColumnSchema, DataType, SourcePosition, TableSchema, TokenType
-from minisql.contracts.plans import CreateTable, Delete, Filter, Insert, Project, SeqScan
+from minisql.contracts.plans import CreateTable, Delete, EmptyScan, Filter, Insert, Project, SeqScan
 from tests.fakes.memory import MemoryCatalog
 
 
@@ -261,6 +261,16 @@ def evaluate(expr, row):
     raise AssertionError(expr.operator)
 
 
+def effective_predicate(plan):
+    """优化后计划的等价谓词：Filter 消除视为恒真，EmptyScan 视为恒假。"""
+    source = plan.source
+    if isinstance(source, Filter):
+        return source.predicate
+    if isinstance(source, EmptyScan):
+        return Literal(False, DataType.BOOL, SourcePosition(1, 1))
+    return Literal(True, DataType.BOOL, SourcePosition(1, 1))
+
+
 @pytest.mark.parametrize("predicate", [
     "id=1+2-1", "TRUE AND id=2", "id=2 AND TRUE", "FALSE OR id=2", "id=2 OR FALSE",
     "FALSE AND id=2", "id=2 AND FALSE", "TRUE OR id=2", "id=2 OR TRUE",
@@ -274,7 +284,7 @@ def test_optimization_equivalence(predicate, statement, compile_sql):
     result = compile_sql(f"{statement} WHERE {predicate};")
     before = deepcopy(result.plan)
     original = result.plan.source.predicate
-    optimized = result.optimized_plan.source.predicate
+    optimized = effective_predicate(result.optimized_plan)
     for row_id in (-(2 ** 63), -2, 0, 1, 2, 3, 2 ** 63 - 1):
         for name in ("", "x", "中文"):
             row = {"id": row_id, "name": name}
@@ -293,7 +303,14 @@ def test_folding_preserves_out_of_range_expression(compile_sql):
 
 def test_folding_has_expected_value_and_position(compile_sql):
     result = compile_sql("SELECT * FROM student WHERE 1+2=3;")
-    assert result.optimized_plan.source.predicate == Literal(True, DataType.BOOL, result.ast.where.position)
+    # 折叠为恒真后 Filter 被消除，直接落到 SeqScan（新语义）。
+    assert isinstance(result.optimized_plan.source, SeqScan)
+    false = compile_sql("SELECT * FROM student WHERE 1+2=4;")
+    assert isinstance(false.optimized_plan.source, EmptyScan)
+    # 非恒真折叠路径保留位置：1+2=3 AND id=1 折叠为 id=1，位置取自原右子树。
+    partial = compile_sql("SELECT * FROM student WHERE 1+2=3 AND id=1;")
+    assert isinstance(partial.optimized_plan.source, Filter)
+    assert partial.optimized_plan.source.predicate.position == partial.ast.where.right.position
 
 
 def test_parser_reusable_and_missing_eof():
@@ -370,4 +387,4 @@ def test_generated_boolean_equivalence(compile_sql):
         for row_id in range(-3, 4):
             for name in ("", "中文"):
                 row = {"id": row_id, "name": name}
-                assert evaluate(result.plan.source.predicate, row) == evaluate(result.optimized_plan.source.predicate, row)
+                assert evaluate(result.plan.source.predicate, row) == evaluate(effective_predicate(result.optimized_plan), row)

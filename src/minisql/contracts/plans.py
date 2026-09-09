@@ -34,13 +34,20 @@ class Project:
     limit: int | None = None
 
 
-QueryPlan: TypeAlias = SeqScan | Filter | Project
+@dataclass(frozen=True)
+class EmptyScan:
+    """恒假条件的空结果计划：不扫描存储，仅携带输出列名。"""
+
+    columns: tuple[str, ...]
+
+
+QueryPlan: TypeAlias = SeqScan | Filter | Project | EmptyScan
 
 
 @dataclass(frozen=True)
 class Delete:
     schema: TableSchema
-    source: SeqScan | Filter  # 删除路径必须保留 RecordId，禁止 Project
+    source: SeqScan | Filter | EmptyScan  # 删除路径必须保留 RecordId，禁止 Project
 
 
 @dataclass(frozen=True)

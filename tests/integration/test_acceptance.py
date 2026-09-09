@@ -143,3 +143,17 @@ def test_string_ordering_query_delete_and_optimization(tmp_path, operator, expec
             row for row in (("a",), ("b",), ("中",)) if row not in expected)
     finally:
         database.close()
+
+
+def test_false_predicate_end_to_end(tmp_path):
+    database = open_database(tmp_path / "db")
+    try:
+        database.execute("CREATE TABLE t(id INT, name VARCHAR);")
+        database.execute("INSERT INTO t(id, name) VALUES (1, 'a');")
+        result = database.execute("SELECT id FROM t WHERE FALSE;")[0]
+        assert result.columns == ("id",)
+        assert result.rows == ()
+        assert database.execute("DELETE FROM t WHERE FALSE;")[0].affected_rows == 0
+        assert database.execute("SELECT * FROM t;")[0].rows == ((1, "a"),)
+    finally:
+        database.close()
