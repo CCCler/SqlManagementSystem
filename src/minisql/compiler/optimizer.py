@@ -46,6 +46,18 @@ def _boolean(node, value):
     return isinstance(node, Literal) and node.data_type is DataType.BOOL and node.value is value
 
 
+def _may_overflow(node):
+    """仅对已通过语义检查的表达式使用；未折叠的整数运算可能报错。
+
+    执行器按左右顺序求值（不短路），不能因吸收律丢弃可能溢出的子树。
+    """
+    if isinstance(node, BinaryExpr):
+        return node.operator in ("+", "-") or _may_overflow(node.left) or _may_overflow(node.right)
+    if isinstance(node, UnaryExpr):
+        return node.operator == "-" or _may_overflow(node.operand)
+    return False
+
+
 def _fold(node):
     if isinstance(node, UnaryExpr):
         operand = _fold(node.operand)
@@ -67,13 +79,15 @@ def _fold(node):
             return right
         if _boolean(right, True):
             return left
-        if _boolean(left, False) or _boolean(right, False):
+        if ((_boolean(left, False) and not _may_overflow(right)) or
+                (_boolean(right, False) and not _may_overflow(left))):
             return Literal(False, DataType.BOOL, node.position)
     if node.operator == "OR":
         if _boolean(left, False):
             return right
         if _boolean(right, False):
             return left
-        if _boolean(left, True) or _boolean(right, True):
+        if ((_boolean(left, True) and not _may_overflow(right)) or
+                (_boolean(right, True) and not _may_overflow(left))):
             return Literal(True, DataType.BOOL, node.position)
     return replace(node, left=left, right=right)

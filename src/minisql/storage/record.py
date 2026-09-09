@@ -337,6 +337,23 @@ class HeapStorage:
             yield from records
             page_id = next_page
 
+    def _legacy_page_belongs(self, root_page: int, target: int, table_id: int) -> bool:
+        """旧页头的 table_id=0 含义不确定，必须从目标表根页验证归属。"""
+        page_id = root_page
+        seen = set()
+        while page_id != NO_PAGE:
+            if page_id <= 0 or page_id in seen:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页链表损坏")
+            seen.add(page_id)
+            header = decode_header(self.buffer.get_page(page_id))
+            if (header.page_id != page_id or header.page_type != PAGE_TYPE_DATA or
+                    header.table_id not in (0, table_id)):
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页类型、编号或归属错误")
+            if page_id == target:
+                return True
+            page_id = header.next_data_page
+        return False
+
     def delete(self, schema: TableSchema, record_id: RecordId) -> None:
         table_id = self._require_table_id(schema)
         root_page = self._get_root_page(table_id)
@@ -352,7 +369,14 @@ class HeapStorage:
         header = decode_header(page)
         if header.page_id != record_id.page_id or header.page_type != PAGE_TYPE_DATA:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
-        if header.table_id != table_id:
+        if header.table_id == 0:
+            # 0 既可能是系统表，也可能是旧用户页的保留字段，不能直接放行。
+            if not self._legacy_page_belongs(root_page, record_id.page_id, table_id):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+            # 遍历可能淘汰目标页，必须重新取缓存引用。成功删除时一并补写归属。
+            page = self.buffer.get_page(record_id.page_id)
+            header = replace(decode_header(page), table_id=table_id)
+        elif header.table_id != table_id:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
         if record_id.slot_id >= header.slot_count:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
