@@ -20,7 +20,7 @@
 
 ### 1.1 页头（24 字节）
 
-struct 格式 `>IBHHHii5s`：
+struct 格式 `>IBHHHiiIB`：
 
 | 字段 | 大小 | 说明 |
 |---|---|---|
@@ -29,9 +29,10 @@ struct 格式 `>IBHHHii5s`：
 | slot_count | 2B | 当前槽数量 |
 | free_start | 2B | 槽目录结束偏移（空闲空间起点） |
 | data_end | 2B | 记录数据区结束偏移（空闲空间终点） |
-| next_free_page | 4B | 空闲页链表下一节点，-1 表示空/尾 |
+| next_free_page | 4B | 空闲页链表下一节点，-1 表示空/尾；DATA 根页复用为插入候选页 |
 | next_data_page | 4B | 同表数据页链表下一节点，-1 表示尾 |
-| reserved | 5B | 保留，置零 |
+| table_id | 4B | 数据页所属表编号，删除时 O(1) 归属校验；META/FREE 页为 0 |
+| reserved | 1B | 保留，置零 |
 
 ### 1.2 槽目录（每项 5 字节）
 

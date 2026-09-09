@@ -138,6 +138,23 @@ class HeapStorage:
         data[offset:offset + ROOT_MAP_ENTRY_SIZE] = ROOT_MAP_STRUCT.pack(root_page)
         self.pages.write_page(0, bytes(data))
 
+    def _get_insert_hint(self, table_id: int) -> int:
+        """读取插入候选页（复用 DATA 根页头 next_free_page 字段，该字段在数据页无意义）。"""
+        root_page = self._get_root_page(table_id)
+        page = self.buffer.get_page(root_page)
+        return decode_header(page).next_free_page
+
+    def _set_insert_hint(self, table_id: int, hint_page: int) -> None:
+        """更新插入候选页；值不变时不写，避免每次插入都弄脏根页。"""
+        root_page = self._get_root_page(table_id)
+        page = self.buffer.get_page(root_page)
+        header = decode_header(page)
+        if header.next_free_page == hint_page:
+            return
+        new_header = replace(header, next_free_page=hint_page)
+        page[:HEADER_SIZE] = encode_header(new_header)
+        self.buffer.mark_dirty(root_page)
+
     def _require_table_id(self, schema: TableSchema) -> int:
         if schema.table_id is None:
             raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
@@ -145,9 +162,9 @@ class HeapStorage:
 
     # ---------- 数据页辅助 ----------
 
-    def _init_data_page(self, page_id: int) -> None:
+    def _init_data_page(self, page_id: int, table_id: int) -> None:
         data = bytearray(PAGE_SIZE)
-        header = PageHeader(page_id, PAGE_TYPE_DATA, 0, HEADER_SIZE, PAGE_SIZE, NO_PAGE, NO_PAGE)
+        header = PageHeader(page_id, PAGE_TYPE_DATA, 0, HEADER_SIZE, PAGE_SIZE, NO_PAGE, NO_PAGE, table_id)
         data[:HEADER_SIZE] = encode_header(header)
         self.pages.write_page(page_id, bytes(data))
 
@@ -218,7 +235,7 @@ class HeapStorage:
                 raise MiniSQLError(ErrorStage.STORAGE, "DUPLICATE_TABLE", str(table_id))
 
         root_page = self.pages.allocate_page()
-        self._init_data_page(root_page)
+        self._init_data_page(root_page, table_id)
         self._set_root_page(table_id, root_page)
 
         if table_id != 0:
@@ -262,7 +279,9 @@ class HeapStorage:
         if len(raw) > MAX_RECORD_SIZE:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "记录超出单页容量")
 
-        page_id = root_page
+        # 从插入候选页开始，避免每次从根页线性扫描（消除 O(N²)）。
+        hint = self._get_insert_hint(table_id)
+        page_id = hint if hint != NO_PAGE else root_page
         while page_id != NO_PAGE:
             page = self.buffer.get_page(page_id)
             header = decode_header(page)
@@ -274,17 +293,21 @@ class HeapStorage:
                     reusable = None
             required = len(raw) + (SLOT_SIZE if reusable is None else 0)
             if header.data_end - header.free_start >= required:
-                return self._insert_into_page(page_id, page, header, raw, reusable)
+                rid = self._insert_into_page(page_id, page, header, raw, reusable)
+                self._set_insert_hint(table_id, page_id)
+                return rid
 
             if header.next_data_page == NO_PAGE:
                 # 尾页满，分配新页并追加到链表尾
                 new_page_id = self.pages.allocate_page()
-                self._init_data_page(new_page_id)
+                self._init_data_page(new_page_id, table_id)
                 tail = replace(header, next_data_page=new_page_id)
                 page[:HEADER_SIZE] = encode_header(tail)
                 self.buffer.mark_dirty(page_id)
                 new_page = self.buffer.get_page(new_page_id)
-                return self._insert_into_page(new_page_id, new_page, decode_header(new_page), raw)
+                rid = self._insert_into_page(new_page_id, new_page, decode_header(new_page), raw)
+                self._set_insert_hint(table_id, new_page_id)
+                return rid
 
             page_id = header.next_data_page
 
@@ -322,21 +345,14 @@ class HeapStorage:
         if record_id.page_id <= 0 or record_id.slot_id < 0:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
 
-        # RecordId 必须属于目标表，不能压缩或删除其他表的数据页。
-        page_id = root_page
-        seen = set()
-        while page_id != NO_PAGE:
-            if page_id <= 0 or page_id in seen:
-                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页链表损坏")
-            seen.add(page_id)
-            page = self.buffer.get_page(page_id)
-            header = decode_header(page)
-            if header.page_id != page_id or header.page_type != PAGE_TYPE_DATA:
-                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页类型或编号错误")
-            if page_id == record_id.page_id:
-                break
-            page_id = header.next_data_page
-        else:
+        # 直接按页号定位并校验归属，避免每次从根页线性遍历（消除 O(N)）。
+        if record_id.page_id >= self._read_meta().next_page_id:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        page = self.buffer.get_page(record_id.page_id)
+        header = decode_header(page)
+        if header.page_id != record_id.page_id or header.page_type != PAGE_TYPE_DATA:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        if header.table_id != table_id:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
         if record_id.slot_id >= header.slot_count:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
@@ -345,6 +361,11 @@ class HeapStorage:
         if flags & SLOT_DELETED:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
         self._compact_page(record_id.page_id, page, header, record_id.slot_id)
+
+        # 目标页在插入候选页之前（或候选页无效）时回拨，保证删除后的空洞可复用。
+        hint = self._get_insert_hint(table_id)
+        if hint == NO_PAGE or record_id.page_id < hint:
+            self._set_insert_hint(table_id, record_id.page_id)
 
     def flush(self) -> None:
         self.buffer.flush_all()

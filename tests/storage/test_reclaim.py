@@ -184,3 +184,27 @@ def test_sql_bulk_delete_reinsert_and_catalog_recovery(tmp_path):
         assert db.execute("SELECT * FROM t;")[0].rows == ()
     finally:
         db.close()
+
+
+def test_insert_hint_persists_and_rewinds(tmp_path):
+    """插入候选页：追加后指向尾页，删除靠前页后回拨，重启后恢复并复用。"""
+    path = tmp_path / "db"
+    storage = open_storage(path)
+    try:
+        schema = storage.create_table(SCHEMA)
+        ids = [storage.insert(schema, (str(i) * 2500,)) for i in range(3)]
+        root = ids[0].page_id
+        # 追加后候选页应指向尾页（根页头 next_free_page 复用为候选页）。
+        assert decode_header(storage.buffer.get_page(root)).next_free_page == ids[2].page_id
+        # 删除中间页后候选页回拨到该页。
+        storage.delete(schema, ids[1])
+        assert decode_header(storage.buffer.get_page(root)).next_free_page == ids[1].page_id
+        storage.flush()
+    finally:
+        storage.close()
+    storage = open_storage(path)
+    try:
+        rid = storage.insert(schema, ("新" * 900,))
+        assert rid.page_id == ids[1].page_id
+    finally:
+        storage.close()

@@ -36,8 +36,8 @@ NO_PAGE = -1  # 链表空指针 / 尾指针
 SLOT_DELETED = 0x01  # 槽标志 bit0：已删除
 
 # page_id(I) + page_type(B) + slot_count(H) + free_start(H) + data_end(H)
-#   + next_free_page(i) + next_data_page(i) + reserved(5s)
-HEADER_STRUCT = struct.Struct(">IBHHHii5s")
+#   + next_free_page(i) + next_data_page(i) + table_id(I) + reserved(B)
+HEADER_STRUCT = struct.Struct(">IBHHHiiIB")
 # offset(H) + length(H) + flags(B)
 SLOT_STRUCT = struct.Struct(">HHB")
 # magic(I) + next_page_id(I) + next_table_id(I) + free_list_head(i)
@@ -62,6 +62,7 @@ class PageHeader:
     data_end: int
     next_free_page: int
     next_data_page: int
+    table_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -81,16 +82,17 @@ def encode_header(header: PageHeader) -> bytes:
         header.data_end,
         header.next_free_page,
         header.next_data_page,
-        b"\x00" * 5,
+        header.table_id,
+        0,
     )
 
 
 def decode_header(data: bytes) -> PageHeader:
-    page_id, page_type, slot_count, free_start, data_end, next_free_page, next_data_page, _ = \
+    page_id, page_type, slot_count, free_start, data_end, next_free_page, next_data_page, table_id, _ = \
         HEADER_STRUCT.unpack(data[:HEADER_SIZE])
     return PageHeader(
         page_id, page_type, slot_count, free_start, data_end,
-        next_free_page, next_data_page,
+        next_free_page, next_data_page, table_id,
     )
 
 
