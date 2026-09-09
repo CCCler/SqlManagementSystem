@@ -64,6 +64,9 @@
 | tests/storage/test_reclaim.py | 删除空间回收、槽复用、页链释放 | 18 |
 | tests/storage/test_cache_experiment.py | LRU/FIFO 缓存对比实验 | 10 |
 
+<!-- 截图待补：pytest 全套 367 项通过 -->
+![全套测试通过截图](assets/pytest-suite.png)
+
 ### 4.2 验收场景
 
 | 场景 | 结果 |
@@ -101,6 +104,9 @@
 结论：容量不足时 LRU 明显优于 FIFO（容量 3 连续访问命中率 0.700 对 0.500）；
 容量足够覆盖工作集时二者一致；持续复用缓存（continuous）优于每轮重建（reset-per-round）。
 
+<!-- 截图待补：cache_experiment 运行输出 -->
+![缓存对比实验输出截图](assets/cache-experiment.png)
+
 ### 4.4 更大规模性能基准
 
 用 `python examples/bench_storage.py`（独立临时文件，单表两列 INT+VARCHAR，
@@ -127,6 +133,9 @@
 
 修复后插入与删除均近似线性，缓存未命中从 127 万降至 362。
 
+<!-- 截图待补：bench_storage 性能基准输出 -->
+![存储性能基准输出截图](assets/bench-storage.png)
+
 ### 4.5 持久化证据
 
 - 关闭文件后重新打开，页分配器、空闲链表、表根页映射与记录均完整恢复。
@@ -152,6 +161,9 @@
   ```
 
   关闭后重开只查到 Bob，证明插入与删除均已正确落盘。
+
+<!-- 截图待补：demo.py 持久化重开演示输出 -->
+![持久化重开演示截图](assets/demo-persistence.png)
 
 ## 5. 关键技术难点与解决
 
