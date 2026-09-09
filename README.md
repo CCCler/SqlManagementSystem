@@ -119,6 +119,15 @@ DROP TABLE student;
 WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRESSION_TOO_COMPLEX`，避免深层表达式造成递归溢出。
 完整字段、统计口径和可手算的验证序列见 [编译跟踪与缓存实验](docs/编译跟踪与缓存实验.md)。
 
+## 查询统计与规模验证
+
+```powershell
+# 真实页存储上比较数据规模、过滤条件、冷/热缓存与事务边界（扫描行/页访问/耗时/峰值内存）
+.\.venv\Scripts\python.exe examples\benchmark.py --sizes 100 1000 10000 --peak-memory
+```
+
+计数范围、结果表格、批量加载成本分析与流式化决策见 [查询统计与规模验证](docs/查询统计与规模验证.md)。
+
 ## 已实现能力与限制
 
 - 支持 `BEGIN`、`COMMIT`、`ROLLBACK`，默认每条 SQL 自动提交；支持多个连接和进程串行访问同一数据库。
