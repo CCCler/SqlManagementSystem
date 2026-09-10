@@ -3,18 +3,70 @@ const $ = id => document.getElementById(id);
 const editor = $('sql-editor');
 const model = {token: '', session: '', connected: false, in_transaction: false,
   transaction_failed: false, tables: [], busy: false, compilations: [], cache: null};
-const example = `-- 入门实验：创建数据表，插入记录，再执行条件查询。
+const example = `-- 入门实验：创建数据表，插入 52 条记录，再执行条件查询与分页。
 -- 示例仅填入编辑器，点击「运行全部」后才执行。
+-- 数据共 52 条，可在「浏览」页签点击 experiments 验证翻页（每页 10 行）。
 CREATE TABLE experiments(id INT, name VARCHAR, score INT);
 
-INSERT INTO experiments(id, name, score) VALUES (1, 'Baseline', 82);
-INSERT INTO experiments(id, name, score) VALUES (2, 'Optimized', 96);
-INSERT INTO experiments(id, name, score) VALUES (3, 'Control', 75);
+INSERT INTO experiments(id, name, score) VALUES (1, 'sample_01', 37);
+INSERT INTO experiments(id, name, score) VALUES (2, 'sample_02', 74);
+INSERT INTO experiments(id, name, score) VALUES (3, 'sample_03', 10);
+INSERT INTO experiments(id, name, score) VALUES (4, 'sample_04', 47);
+INSERT INTO experiments(id, name, score) VALUES (5, 'sample_05', 84);
+INSERT INTO experiments(id, name, score) VALUES (6, 'sample_06', 20);
+INSERT INTO experiments(id, name, score) VALUES (7, 'sample_07', 57);
+INSERT INTO experiments(id, name, score) VALUES (8, 'sample_08', 94);
+INSERT INTO experiments(id, name, score) VALUES (9, 'sample_09', 30);
+INSERT INTO experiments(id, name, score) VALUES (10, 'sample_10', 67);
+INSERT INTO experiments(id, name, score) VALUES (11, 'sample_11', 3);
+INSERT INTO experiments(id, name, score) VALUES (12, 'sample_12', 40);
+INSERT INTO experiments(id, name, score) VALUES (13, 'sample_13', 77);
+INSERT INTO experiments(id, name, score) VALUES (14, 'sample_14', 13);
+INSERT INTO experiments(id, name, score) VALUES (15, 'sample_15', 50);
+INSERT INTO experiments(id, name, score) VALUES (16, 'sample_16', 87);
+INSERT INTO experiments(id, name, score) VALUES (17, 'sample_17', 23);
+INSERT INTO experiments(id, name, score) VALUES (18, 'sample_18', 60);
+INSERT INTO experiments(id, name, score) VALUES (19, 'sample_19', 97);
+INSERT INTO experiments(id, name, score) VALUES (20, 'sample_20', 33);
+INSERT INTO experiments(id, name, score) VALUES (21, 'sample_21', 70);
+INSERT INTO experiments(id, name, score) VALUES (22, 'sample_22', 6);
+INSERT INTO experiments(id, name, score) VALUES (23, 'sample_23', 43);
+INSERT INTO experiments(id, name, score) VALUES (24, 'sample_24', 80);
+INSERT INTO experiments(id, name, score) VALUES (25, 'sample_25', 16);
+INSERT INTO experiments(id, name, score) VALUES (26, 'sample_26', 53);
+INSERT INTO experiments(id, name, score) VALUES (27, 'sample_27', 90);
+INSERT INTO experiments(id, name, score) VALUES (28, 'sample_28', 26);
+INSERT INTO experiments(id, name, score) VALUES (29, 'sample_29', 63);
+INSERT INTO experiments(id, name, score) VALUES (30, 'sample_30', 100);
+INSERT INTO experiments(id, name, score) VALUES (31, 'sample_31', 36);
+INSERT INTO experiments(id, name, score) VALUES (32, 'sample_32', 73);
+INSERT INTO experiments(id, name, score) VALUES (33, 'sample_33', 9);
+INSERT INTO experiments(id, name, score) VALUES (34, 'sample_34', 46);
+INSERT INTO experiments(id, name, score) VALUES (35, 'sample_35', 83);
+INSERT INTO experiments(id, name, score) VALUES (36, 'sample_36', 19);
+INSERT INTO experiments(id, name, score) VALUES (37, 'sample_37', 56);
+INSERT INTO experiments(id, name, score) VALUES (38, 'sample_38', 93);
+INSERT INTO experiments(id, name, score) VALUES (39, 'sample_39', 29);
+INSERT INTO experiments(id, name, score) VALUES (40, 'sample_40', 66);
+INSERT INTO experiments(id, name, score) VALUES (41, 'sample_41', 2);
+INSERT INTO experiments(id, name, score) VALUES (42, 'sample_42', 39);
+INSERT INTO experiments(id, name, score) VALUES (43, 'sample_43', 76);
+INSERT INTO experiments(id, name, score) VALUES (44, 'sample_44', 12);
+INSERT INTO experiments(id, name, score) VALUES (45, 'sample_45', 49);
+INSERT INTO experiments(id, name, score) VALUES (46, 'sample_46', 86);
+INSERT INTO experiments(id, name, score) VALUES (47, 'sample_47', 22);
+INSERT INTO experiments(id, name, score) VALUES (48, 'sample_48', 59);
+INSERT INTO experiments(id, name, score) VALUES (49, 'sample_49', 96);
+INSERT INTO experiments(id, name, score) VALUES (50, 'sample_50', 32);
+INSERT INTO experiments(id, name, score) VALUES (51, 'sample_51', 69);
+INSERT INTO experiments(id, name, score) VALUES (52, 'sample_52', 5);
 
 SELECT id, name, score FROM experiments
 WHERE score > 80 AND 1 = 1;
 
 SELECT id, name, score FROM experiments ORDER BY score DESC;
+
+SELECT id, name, score FROM experiments ORDER BY id LIMIT 10 OFFSET 50;
 `;
 
 function el(tag, className, text) {
@@ -188,13 +240,28 @@ function errorBox(error, in_transaction) {
   if (in_transaction) box.append(el('p', 'error-text', '当前事务已出错，请先点击「回滚」。'));
   return box;
 }
+function dmlSummaryBlock(dml) {
+  const block = el('section', 'result-block');
+  const heading = el('div', 'result-heading');
+  const affected = dml.reduce((sum, [result]) => sum + (result.affected_rows || 0), 0);
+  heading.append(el('span', 'success-dot', '✓'), el('strong', '', '写入操作'), el('span', '', `${dml.length} 条语句 · 共影响 ${affected} 行`));
+  block.append(heading);
+  return block;
+}
 function renderResults(data) {
   const results = $('results'); results.replaceChildren();
   $('result-count').textContent = data.results.length;
   $('execution-meta').textContent = `${data.ok ? '执行完成' : '执行失败'} · ${data.elapsed_ms} ms`;
   if (!data.ok) results.append(errorBox(data.error, data.in_transaction));
   else if (!data.results.length) results.append(empty('没有可执行的语句', '输入内容仅含空白或注释。'));
-  else data.results.forEach((result, index) => results.append(resultBlock(result, index)));
+  else {
+    const selects = []; const dml = [];
+    data.results.forEach((result, index) => {
+      (result.columns && result.columns.length ? selects : dml).push([result, index]);
+    });
+    selects.forEach(([result, index]) => results.append(resultBlock(result, index)));
+    if (dml.length) results.append(dmlSummaryBlock(dml));
+  }
 }
 function renderBrowseTables() {
   const grid = $('browse-tables'); grid.replaceChildren();
@@ -217,7 +284,7 @@ function renderBrowseTables() {
 }
 async function browseTable(tableName, offset = 0) {
   if (model.busy || !model.connected) return;
-  const pageSize = 50;
+  const pageSize = 10;
   await task(async () => {
     // 多取一行判断是否还有下一页，避免依赖尚未实现的 COUNT。
     const sql = `SELECT * FROM ${tableName} LIMIT ${pageSize + 1} OFFSET ${offset};`;
@@ -258,8 +325,8 @@ function renderBrowse(tableName, columns, rows, offset, pageSize, hasMore) {
   const next = el('button', 'button small', '下一页');
   const label = el('span');
   label.textContent = `第 ${page} 页 · 本页 ${rows.length} 行`;
-  prev.disabled = offset === 0 || model.busy;
-  next.disabled = !hasMore || model.busy;
+  prev.disabled = offset === 0;
+  next.disabled = !hasMore;
   prev.onclick = () => browseTable(tableName, Math.max(0, offset - pageSize));
   next.onclick = () => browseTable(tableName, offset + pageSize);
   pager.append(label, prev, next);
