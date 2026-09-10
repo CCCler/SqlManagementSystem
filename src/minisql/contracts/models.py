@@ -1,5 +1,7 @@
 """共享类型：位置从 1 开始，记录按表定义的列顺序存储。"""
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
 from enum import Enum
 from typing import TypeAlias
 
@@ -8,9 +10,14 @@ class DataType(str, Enum):
     INT = "INT"
     VARCHAR = "VARCHAR"
     BOOL = "BOOL"
+    DECIMAL = "DECIMAL"
+    DATE = "DATE"
+    TIME = "TIME"
+    TIMESTAMP = "TIMESTAMP"
 
 
-Value: TypeAlias = int | str | bool
+# None 表示 NULL；NULL 是缺失值语义，不作为可声明的字段类型。
+Value: TypeAlias = int | str | bool | Decimal | date | time | datetime | None
 Row: TypeAlias = tuple[Value, ...]
 
 
@@ -40,6 +47,8 @@ class Token:
 class ColumnSchema:
     name: str
     data_type: DataType
+    precision: int | None = None  # DECIMAL 总位数（仅 DECIMAL 使用）
+    scale: int | None = None      # DECIMAL 小数位（仅 DECIMAL 使用）
 
 
 @dataclass(frozen=True)

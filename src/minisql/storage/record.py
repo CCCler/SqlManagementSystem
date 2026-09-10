@@ -9,8 +9,10 @@ HeapStorage 在磁盘上以页为单位存取记录：
     - root_page 映射持久化在页 0 的映射区（下标 = table_id）。
 """
 import struct
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import BufferPool, PageManager
@@ -18,39 +20,116 @@ from minisql.contracts.models import (
     ColumnSchema, DataType, RecordId, Row, StoredRecord, TableSchema,
 )
 from minisql.storage.page import (
+    FORMAT_VERSION_V1, FORMAT_VERSION_V2,
     HEADER_SIZE, META_OFFSET, META_SIZE, NO_PAGE, NO_ROOT, PAGE_SIZE, PAGE_TYPE_DATA,
     ROOT_MAP_ENTRY_SIZE, ROOT_MAP_OFFSET, ROOT_MAP_STRUCT,
     SLOT_DELETED, SLOT_SIZE, PageHeader, StorageMeta,
     decode_header, decode_meta, decode_slot, encode_header, encode_meta, encode_slot,
+    read_format_version,
 )
 
 INT_STRUCT = struct.Struct(">q")
 VARCHAR_LEN_STRUCT = struct.Struct(">H")
+BOOL_STRUCT = struct.Struct(">?")
+DATE_STRUCT = struct.Struct(">i")       # 距 1970-01-01 的天数（可为负）
+TIME_STRUCT = struct.Struct(">q")       # 自午夜起的微秒数
+TIMESTAMP_STRUCT = struct.Struct(">q")  # 距 1970-01-01 00:00:00 的微秒数（可为负）
 
 INT_MIN = -(2**63)
 INT_MAX = 2**63 - 1
 VARCHAR_MAX_BYTES = 2**16 - 1
+
+# V2 格式中每个值前的可空标记：0 表示有值，1 表示 NULL。
+VALUE_FLAG = 0x00
+NULL_FLAG = 0x01
+_V1_TYPES = (DataType.INT, DataType.VARCHAR)
+
+_EPOCH_DATE = date(1970, 1, 1)
+_EPOCH_DATETIME = datetime(1970, 1, 1)
 
 # 单条记录编码后的最大字节数：页大小 - 页头 - 一个槽项。
 MAX_RECORD_SIZE = PAGE_SIZE - HEADER_SIZE - SLOT_SIZE
 
 
 class RowCodec:
+    """记录编解码，按格式版本分派 V1/V2 编码。
+
+    V1（旧格式）：仅 INT/VARCHAR，无 NULL 标记，保留旧库可读。
+    V2（新格式）：每列 1 字节可空标记 + 值，支持全部类型与 NULL。
+    """
+
+    def __init__(self, format_version: int = FORMAT_VERSION_V1) -> None:
+        self.format_version = format_version
+
     def encode(self, schema: TableSchema, row: Row) -> bytes:
         if len(row) != len(schema.columns):
             raise MiniSQLError(
                 ErrorStage.STORAGE, "INVALID_RECORD",
                 f"列数不匹配：期望 {len(schema.columns)}，实际 {len(row)}",
             )
-        parts = [self._encode_value(column, value) for column, value in zip(schema.columns, row)]
-        return b"".join(parts)
+        if self.format_version == FORMAT_VERSION_V1:
+            return self._encode_v1(schema, row)
+        return self._encode_v2(schema, row)
 
     def decode(self, schema: TableSchema, data: bytes) -> Row:
+        if self.format_version == FORMAT_VERSION_V1:
+            return self._decode_v1(schema, data)
+        return self._decode_v2(schema, data)
+
+    def _encode_v1(self, schema: TableSchema, row: Row) -> bytes:
+        parts = []
+        for column, value in zip(schema.columns, row):
+            if column.data_type not in _V1_TYPES:
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 类型 {column.data_type.value} 需要格式版本 2",
+                )
+            if value is None:
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 不支持 NULL（需要格式版本 2）",
+                )
+            parts.append(self._encode_value(column, value))
+        return b"".join(parts)
+
+    def _encode_v2(self, schema: TableSchema, row: Row) -> bytes:
+        parts = []
+        for column, value in zip(schema.columns, row):
+            if value is None:
+                parts.append(bytes((NULL_FLAG,)))
+            else:
+                parts.append(bytes((VALUE_FLAG,)))
+                parts.append(self._encode_value(column, value))
+        return b"".join(parts)
+
+    def _decode_v1(self, schema: TableSchema, data: bytes) -> Row:
         values: list[object] = []
         pos = 0
         for column in schema.columns:
+            if column.data_type not in _V1_TYPES:
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 类型 {column.data_type.value} 需要格式版本 2",
+                )
             value, pos = self._decode_value(column, data, pos)
             values.append(value)
+        return tuple(values)
+
+    def _decode_v2(self, schema: TableSchema, data: bytes) -> Row:
+        values: list[object] = []
+        pos = 0
+        for column in schema.columns:
+            if pos >= len(data):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "可空标记不足")
+            flag = data[pos]
+            pos += 1
+            if flag == NULL_FLAG:
+                values.append(None)
+            elif flag == VALUE_FLAG:
+                value, pos = self._decode_value(column, data, pos)
+                values.append(value)
+            else:
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", f"未知可空标记 {flag}")
         return tuple(values)
 
     def _encode_value(self, column: ColumnSchema, value: object) -> bytes:
@@ -82,6 +161,61 @@ class RowCodec:
                 )
             return VARCHAR_LEN_STRUCT.pack(len(raw)) + raw
 
+        if column.data_type == DataType.BOOL:
+            if not isinstance(value, bool):
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 期望 BOOL，实际 {type(value).__name__}",
+                )
+            return BOOL_STRUCT.pack(value)
+
+        if column.data_type == DataType.DECIMAL:
+            if not isinstance(value, Decimal):
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 期望 DECIMAL，实际 {type(value).__name__}",
+                )
+            if not value.is_finite():
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "INVALID_RECORD",
+                    f"列 {column.name} 不允许 NaN 或 Infinity",
+                )
+            raw = str(value).encode("utf-8")
+            if len(raw) > VARCHAR_MAX_BYTES:
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "INVALID_RECORD",
+                    f"列 {column.name} 数值过长",
+                )
+            return VARCHAR_LEN_STRUCT.pack(len(raw)) + raw
+
+        if column.data_type == DataType.DATE:
+            if isinstance(value, datetime) or not isinstance(value, date):
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 期望 DATE，实际 {type(value).__name__}",
+                )
+            return DATE_STRUCT.pack((value - _EPOCH_DATE).days)
+
+        if column.data_type == DataType.TIME:
+            if not isinstance(value, time):
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 期望 TIME，实际 {type(value).__name__}",
+                )
+            micros = (((value.hour * 60 + value.minute) * 60 + value.second) * 1_000_000
+                      + value.microsecond)
+            return TIME_STRUCT.pack(micros)
+
+        if column.data_type == DataType.TIMESTAMP:
+            if not isinstance(value, datetime):
+                raise MiniSQLError(
+                    ErrorStage.STORAGE, "TYPE_MISMATCH",
+                    f"列 {column.name} 期望 TIMESTAMP，实际 {type(value).__name__}",
+                )
+            delta = value - _EPOCH_DATETIME
+            micros = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+            return TIMESTAMP_STRUCT.pack(micros)
+
         raise MiniSQLError(
             ErrorStage.STORAGE, "TYPE_MISMATCH",
             f"列 {column.name} 不支持类型 {column.data_type.value}",
@@ -95,25 +229,65 @@ class RowCodec:
             return INT_STRUCT.unpack(data[pos:end])[0], end
 
         if column.data_type == DataType.VARCHAR:
+            return self._decode_varchar(data, pos)
+
+        if column.data_type == DataType.BOOL:
+            end = pos + BOOL_STRUCT.size
+            if end > len(data):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "BOOL 数据不足")
+            return BOOL_STRUCT.unpack(data[pos:end])[0], end
+
+        if column.data_type == DataType.DECIMAL:
             if pos + VARCHAR_LEN_STRUCT.size > len(data):
-                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "VARCHAR 长度前缀不足")
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "DECIMAL 长度前缀不足")
             (length,) = VARCHAR_LEN_STRUCT.unpack(data[pos:pos + VARCHAR_LEN_STRUCT.size])
             end = pos + VARCHAR_LEN_STRUCT.size + length
             if end > len(data):
-                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "VARCHAR 数据不足")
-            return data[pos + VARCHAR_LEN_STRUCT.size:end].decode("utf-8"), end
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "DECIMAL 数据不足")
+            return Decimal(data[pos + VARCHAR_LEN_STRUCT.size:end].decode("utf-8")), end
+
+        if column.data_type == DataType.DATE:
+            end = pos + DATE_STRUCT.size
+            if end > len(data):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "DATE 数据不足")
+            (days,) = DATE_STRUCT.unpack(data[pos:end])
+            return _EPOCH_DATE + timedelta(days=days), end
+
+        if column.data_type == DataType.TIME:
+            end = pos + TIME_STRUCT.size
+            if end > len(data):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "TIME 数据不足")
+            (micros,) = TIME_STRUCT.unpack(data[pos:end])
+            return (datetime.min + timedelta(microseconds=micros)).time(), end
+
+        if column.data_type == DataType.TIMESTAMP:
+            end = pos + TIMESTAMP_STRUCT.size
+            if end > len(data):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "TIMESTAMP 数据不足")
+            (micros,) = TIMESTAMP_STRUCT.unpack(data[pos:end])
+            return _EPOCH_DATETIME + timedelta(microseconds=micros), end
 
         raise MiniSQLError(
             ErrorStage.STORAGE, "TYPE_MISMATCH",
             f"列 {column.name} 不支持类型 {column.data_type.value}",
         )
 
+    def _decode_varchar(self, data: bytes, pos: int) -> tuple[str, int]:
+        if pos + VARCHAR_LEN_STRUCT.size > len(data):
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "VARCHAR 长度前缀不足")
+        (length,) = VARCHAR_LEN_STRUCT.unpack(data[pos:pos + VARCHAR_LEN_STRUCT.size])
+        end = pos + VARCHAR_LEN_STRUCT.size + length
+        if end > len(data):
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "VARCHAR 数据不足")
+        return data[pos + VARCHAR_LEN_STRUCT.size:end].decode("utf-8"), end
+
 
 class HeapStorage:
     def __init__(self, pages: PageManager, buffer: BufferPool) -> None:
         self.pages = pages
         self.buffer = buffer
-        self.codec = RowCodec()
+        self.format_version = read_format_version(self.pages.read_page(0))
+        self.codec = RowCodec(self.format_version)
 
     # ---------- 页 0 元信息与映射区 ----------
 
@@ -171,6 +345,22 @@ class HeapStorage:
     def _slots(self, page: bytearray, header: PageHeader) -> list[tuple[int, int, int]]:
         return [decode_slot(page[start:start + SLOT_SIZE])
                 for start in range(HEADER_SIZE, HEADER_SIZE + header.slot_count * SLOT_SIZE, SLOT_SIZE)]
+
+    def _chain_pages(self, root_page: int) -> list[int]:
+        """遍历表数据页链，校验编号、类型与环；返回按链表顺序的页号列表。"""
+        page_ids: list[int] = []
+        seen: set[int] = set()
+        page_id = root_page
+        while page_id != NO_PAGE:
+            if page_id <= 0 or page_id in seen:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页链表损坏")
+            seen.add(page_id)
+            header = decode_header(self.buffer.get_page(page_id))
+            if header.page_id != page_id or header.page_type != PAGE_TYPE_DATA:
+                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页类型或编号错误")
+            page_ids.append(page_id)
+            page_id = header.next_data_page
+        return page_ids
 
     def _compact_page(self, page_id: int, page: bytearray, header: PageHeader,
                       deleted_slot: int | None = None) -> PageHeader:
@@ -253,21 +443,75 @@ class HeapStorage:
             raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
 
         # 先验证完整页链，避免损坏链表导致重复释放；读取缓存中最新的链指针。
-        page_ids = []
-        seen = set()
-        while page_id != NO_PAGE:
-            if page_id <= 0 or page_id in seen:
-                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页链表损坏")
-            seen.add(page_id)
-            header = decode_header(self.buffer.get_page(page_id))
-            if header.page_id != page_id or header.page_type != PAGE_TYPE_DATA:
-                raise MiniSQLError(ErrorStage.STORAGE, "IO_ERROR", "表数据页类型或编号错误")
-            page_ids.append(page_id)
-            page_id = header.next_data_page
+        page_ids = self._chain_pages(page_id)
         self._set_root_page(table_id, NO_ROOT)
         for page_id in page_ids:
             self.buffer.discard_page(page_id)
             self.pages.free_page(page_id)
+
+    def rewrite_table(self, schema: TableSchema, new_schema: TableSchema,
+                      transform: Callable[[Row], Row | None]) -> TableSchema:
+        """把整表存活记录重写为 new_schema 结构，成功后原子替换物理结构。
+
+        transform 对每条旧记录返回新行，返回 None 表示丢弃该记录。整表先完成
+        转换与编码，再写入全新页链，最后切换根页映射并回收旧页链；任一步失败都
+        保持旧结构与旧数据不变，不会留下半成品页链。
+
+        本方法只提供存储层能力：Catalog 更新与事务原子性由调用方负责（在
+        TransactionalDatabase 内调用时，崩溃恢复由整文件前映像日志覆盖）。
+        """
+        table_id = self._require_table_id(schema)
+        if new_schema.table_id != table_id:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD",
+                               "重写目标表编号必须与源表一致")
+        if not new_schema.columns:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "重写目标结构不能没有列")
+        old_root = self._get_root_page(table_id)
+        if old_root == NO_ROOT:
+            raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
+
+        # 1. 先完成全部转换与编码：类型或容量错误在改动物理结构前暴露。
+        encoded: list[bytes] = []
+        for record in self.scan(schema):
+            new_row = transform(record.row)
+            if new_row is None:
+                continue
+            raw = self.codec.encode(new_schema, new_row)
+            if len(raw) > MAX_RECORD_SIZE:
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "记录超出单页容量")
+            encoded.append(raw)
+
+        # 2. 写入全新页链（尚未切换 table_id 映射）。
+        new_root = self._write_chain(table_id, encoded)
+
+        # 3. 切换根页映射；此后读取都走新结构。
+        self._set_root_page(table_id, new_root)
+        self._set_insert_hint(table_id, new_root)
+
+        # 4. 回收旧页链；失败只泄漏旧页，不影响已切换的新数据。
+        for page_id in self._chain_pages(old_root):
+            self.buffer.discard_page(page_id)
+            self.pages.free_page(page_id)
+        return replace(new_schema, table_id=table_id)
+
+    def _write_chain(self, table_id: int, encoded: list[bytes]) -> int:
+        """把已编码记录顺序写入一条新页链，返回新根页号；不修改根页映射。"""
+        root_page = self.pages.allocate_page()
+        self._init_data_page(root_page, table_id)
+        page_id = root_page
+        for raw in encoded:
+            page = self.buffer.get_page(page_id)
+            header = decode_header(page)
+            if header.data_end - header.free_start < len(raw) + SLOT_SIZE:
+                new_page = self.pages.allocate_page()
+                self._init_data_page(new_page, table_id)
+                page[:HEADER_SIZE] = encode_header(replace(header, next_data_page=new_page))
+                self.buffer.mark_dirty(page_id)
+                page_id = new_page
+                page = self.buffer.get_page(page_id)
+                header = decode_header(page)
+            self._insert_into_page(page_id, page, header, raw)
+        return root_page
 
     def insert(self, schema: TableSchema, row: Row) -> RecordId:
         table_id = self._require_table_id(schema)

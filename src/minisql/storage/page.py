@@ -30,6 +30,8 @@ META_SIZE = 16
 PAGE_TYPE_FREE = 0
 PAGE_TYPE_DATA = 1
 PAGE_TYPE_META = 2
+PAGE_TYPE_INDEX_LEAF = 3
+PAGE_TYPE_INDEX_INTERNAL = 4
 
 NO_PAGE = -1  # 链表空指针 / 尾指针
 
@@ -51,6 +53,26 @@ ROOT_MAP_OFFSET = META_OFFSET + META_SIZE  # 40
 ROOT_MAP_ENTRY_SIZE = 4
 ROOT_MAP_STRUCT = struct.Struct(">I")
 NO_ROOT = 0
+
+# 格式版本号：页 0 页头 reserved 字节承载（历史布局该字节恒为 0）。
+#   V1 = 1：旧格式，仅 INT/VARCHAR，无 NULL 标记。
+#   V2 = 2：新格式，每列带 1 字节 NULL 标记，支持 BOOL/DECIMAL/DATE/TIME/TIMESTAMP 与 NULL。
+# 旧文件的 reserved 字节为 0，读取时归一化为 V1，保证旧库可读、不自动迁移。
+FORMAT_VERSION_V1 = 1
+FORMAT_VERSION_V2 = 2
+FORMAT_VERSION_CURRENT = FORMAT_VERSION_V2
+_FORMAT_VERSION_OFFSET = HEADER_SIZE - 1  # 页头 reserved 字节偏移
+
+
+def read_format_version(page0: bytes) -> int:
+    """读取页 0 的格式版本号；旧文件的 0 归一化为 V1。"""
+    raw = page0[_FORMAT_VERSION_OFFSET]
+    return FORMAT_VERSION_V1 if raw == 0 else raw
+
+
+def write_format_version(page0: bytearray, version: int) -> None:
+    """写入页 0 的格式版本号。"""
+    page0[_FORMAT_VERSION_OFFSET] = version
 
 
 @dataclass(frozen=True)
@@ -144,6 +166,7 @@ class DiskPageManager:
         data[:HEADER_SIZE] = encode_header(header)
         data[META_OFFSET:META_OFFSET + META_SIZE] = encode_meta(
             StorageMeta(META_MAGIC, 1, 1, NO_PAGE))
+        write_format_version(data, FORMAT_VERSION_CURRENT)
         self.write_page(0, bytes(data))
 
     def _read_meta(self) -> StorageMeta:

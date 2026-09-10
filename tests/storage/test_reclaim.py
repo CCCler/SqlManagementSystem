@@ -61,7 +61,10 @@ def test_empty_page_and_slot_reuse_do_not_grow_forever(tmp_path):
         storage.delete(schema, anchor)
         header = decode_header(storage.buffer.get_page(anchor.page_id))
         assert (header.slot_count, header.free_start, header.data_end) == (0, HEADER_SIZE, PAGE_SIZE)
-        largest = ("x" * (MAX_RECORD_SIZE - 2),)
+        # 记录容量受格式版本影响：V1 的 VARCHAR 仅 2 字节长度前缀，V2 增加 1 字节可空标记。
+        # 用空串编码长度作为每行固定开销，避免硬编码 2/3 字节。
+        overhead = len(storage.codec.encode(schema, ("",)))
+        largest = ("x" * (MAX_RECORD_SIZE - overhead),)
         assert storage.insert(schema, largest).page_id == anchor.page_id
         assert [r.row for r in storage.scan(schema)] == [largest]
     finally:
