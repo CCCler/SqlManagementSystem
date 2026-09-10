@@ -67,6 +67,9 @@ def render_plan(plan: Plan) -> str:
         line = f"Project({', '.join(plan.columns)})"
         if plan.distinct:
             line += " DISTINCT"
+        if plan.order_by:
+            terms = ", ".join(f"{name} {'DESC' if descending else 'ASC'}" for name, descending in plan.order_by)
+            line += f" ORDER BY {terms}"
         if plan.limit is not None:
             line += f" LIMIT {plan.limit}"
         return line + "\n" + _indent(render_plan(plan.source))
@@ -160,6 +163,12 @@ class PlanExecutor:
                         seen.add(row)
                         deduped.append(row)
                 projected = deduped
+            if plan.order_by:
+                # 从后往前对每个排序键做稳定排序，支持多列混合 ASC/DESC。
+                column_index = {name: index for index, name in enumerate(plan.columns)}
+                for name, descending in reversed(plan.order_by):
+                    index = column_index[name]
+                    projected.sort(key=lambda row, i=index: row[i], reverse=descending)
             if plan.limit is not None:
                 projected = projected[:plan.limit]
             return plan.columns, projected

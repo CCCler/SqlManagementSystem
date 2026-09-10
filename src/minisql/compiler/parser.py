@@ -1,6 +1,6 @@
 from minisql.contracts.ast import (
     BinaryExpr, CreateTableStmt, DeleteStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt,
-    Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
+    Literal, OrderTerm, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.models import ColumnSchema, DataType, SourcePosition, TableSchema, Token, TokenType
@@ -118,7 +118,10 @@ class _Parser:
             columns = self.separated(self.identifier)
         self.expect("FROM")
         table = self.identifier()
-        return SelectStmt(table, columns, self.where(), position, distinct, self.limit_clause())
+        where = self.where()
+        order_by = self.order_by_clause()
+        limit = self.limit_clause()
+        return SelectStmt(table, columns, where, position, distinct, limit, order_by)
 
     def delete_body(self, position):
         self.take()  # DELETE
@@ -143,6 +146,20 @@ class _Parser:
                 return int(digits) if len(digits) <= 19 else 2 ** 63
             self.error("INTEGER")
         return None
+
+    def order_by_clause(self):
+        if not self.matches("ORDER"):
+            return ()
+        self.take()
+        self.expect("BY")
+        return self.separated(self.order_term)
+
+    def order_term(self):
+        column = self.identifier()
+        descending = False
+        if self.matches("ASC") or self.matches("DESC"):
+            descending = self.take().lexeme.upper() == "DESC"
+        return OrderTerm(column, descending)
 
     def where(self):
         if self.matches("WHERE"):

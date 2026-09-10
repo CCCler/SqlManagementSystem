@@ -49,6 +49,12 @@ class InsertStmt:
 
 
 @dataclass(frozen=True)
+class OrderTerm:
+    column: Identifier
+    descending: bool = False
+
+
+@dataclass(frozen=True)
 class SelectStmt:
     table: Identifier
     columns: tuple[Identifier, ...] | None  # None 表示 *
@@ -56,6 +62,7 @@ class SelectStmt:
     position: SourcePosition
     distinct: bool = False
     limit: int | None = None
+    order_by: tuple[OrderTerm, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -21,5 +21,12 @@ class Planner:
             source = Filter(statement.where, source)
         if isinstance(statement, SelectStmt):
             columns = schema.columns if statement.columns is None else statement.columns
-            return Project(tuple(c.name for c in columns), source, statement.distinct, statement.limit)
+            order_by = tuple((term.column.name, term.descending) for term in statement.order_by)
+            return Project(
+                columns=tuple(c.name for c in columns),
+                source=source,
+                distinct=statement.distinct,
+                limit=statement.limit,
+                order_by=order_by,
+            )
         return Delete(schema, source)

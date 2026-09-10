@@ -13,6 +13,8 @@ INSERT INTO experiments(id, name, score) VALUES (3, 'Control', 75);
 
 SELECT id, name, score FROM experiments
 WHERE score > 80 AND 1 = 1;
+
+SELECT id, name, score FROM experiments ORDER BY score DESC;
 `;
 
 function el(tag, className, text) {
@@ -113,7 +115,7 @@ function renderTables() {
 function highlight() {
   const sql = editor.value;
   const fragment = document.createDocumentFragment();
-  const regex = /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*(?:'|$)|\b(?:CREATE|TABLE|INSERT|INTO|VALUES|SELECT|DISTINCT|FROM|WHERE|DELETE|DROP|EXPLAIN|LIMIT|BEGIN|COMMIT|ROLLBACK|INT|VARCHAR|BOOL|TRUE|FALSE|AND|OR|NOT)\b|\b\d+\b)/gi;
+  const regex = /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*(?:'|$)|\b(?:CREATE|TABLE|INSERT|INTO|VALUES|SELECT|DISTINCT|FROM|WHERE|ORDER|BY|ASC|DESC|DELETE|DROP|EXPLAIN|LIMIT|BEGIN|COMMIT|ROLLBACK|INT|VARCHAR|BOOL|TRUE|FALSE|AND|OR|NOT)\b|\b\d+\b)/gi;
   let end = 0;
   for (const match of sql.matchAll(regex)) {
     fragment.append(document.createTextNode(sql.slice(end, match.index)));

@@ -112,6 +112,16 @@ class SemanticAnalyzer:
                 if kind is not DataType.BOOL:
                     fail("TYPE_MISMATCH", "WHERE 必须为 BOOL", where.position)
             bound = replace(statement, table=table, where=where)
-            if isinstance(bound, SelectStmt) and bound.columns is not None:
-                bound = replace(bound, columns=tuple(column(c) for c in bound.columns))
+            if isinstance(bound, SelectStmt):
+                if bound.columns is not None:
+                    bound = replace(bound, columns=tuple(column(c) for c in bound.columns))
+                # ORDER BY 列必须出现在投影列中，避免排序键与输出列脱节。
+                projected = {c.name for c in schema.columns} if bound.columns is None else {c.name for c in bound.columns}
+                order_by = []
+                for term in bound.order_by:
+                    resolved = column(term.column)
+                    if resolved.name not in projected:
+                        fail("UNKNOWN_COLUMN", f"ORDER BY 列 {resolved.name} 必须出现在投影列中", term.column.position)
+                    order_by.append(replace(term, column=resolved))
+                bound = replace(bound, order_by=tuple(order_by))
         return SemanticResult(bound, schema)
