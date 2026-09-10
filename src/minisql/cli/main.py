@@ -2,6 +2,8 @@
 import argparse
 import math
 import sys
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 
 from minisql.compiler.statements import scan_statements
@@ -11,6 +13,25 @@ from minisql.engine.database import open_database
 from minisql.cli.trace import TracingCompiler, emit_event, to_json_value
 
 
+def format_value(value) -> str:
+    """结果值的前瞻渲染：NULL/DECIMAL/日期时间/BOOL 统一显示。
+
+    规则见 docs/NULL语义与结果展示提案-成员三.md；新类型契约生效前
+    INT/VARCHAR 的现有输出不变。
+    """
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return str(value)
+
+
 def render_result(result: ExecutionResult) -> str:
     """把执行结果格式化为表格文本；非查询结果显示提示信息。"""
     if not result.columns:
@@ -18,11 +39,11 @@ def render_result(result: ExecutionResult) -> str:
     widths = [len(column) for column in result.columns]
     for row in result.rows:
         for index, value in enumerate(row):
-            widths[index] = max(widths[index], len(str(value)))
+            widths[index] = max(widths[index], len(format_value(value)))
     lines = [" | ".join(column.ljust(widths[index]) for index, column in enumerate(result.columns))]
     lines.append("-+-".join("-" * width for width in widths))
     for row in result.rows:
-        lines.append(" | ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)))
+        lines.append(" | ".join(format_value(value).ljust(widths[index]) for index, value in enumerate(row)))
     if not result.rows:
         lines.append("(空结果集)")
     return "\n".join(lines)
