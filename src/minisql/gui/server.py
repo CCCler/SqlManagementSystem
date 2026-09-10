@@ -68,6 +68,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    MAX_DRAIN = MAX_BODY * 4  # 拒绝超大请求体时最多消费的量，防止无限读取。
+
+    def drain_body(self, length: int) -> None:
+        """消费未读请求体；超过上限的部分不读，由连接关闭兜底。"""
+        try:
+            remaining = min(max(length, 0), self.MAX_DRAIN)
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
+        except (TimeoutError, ConnectionResetError):
+            pass
+
     def valid_host(self):
         return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
 
@@ -90,18 +104,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if (not self.valid_host() or self.headers.get("Origin") not in (None, self.server.origin)
                 or self.headers.get("X-MiniSQL-Token") != self.server.token):
-            # 消费小请求体，避免 Windows 在带未读数据关闭 socket 时丢弃 403。
+            # 消费请求体，避免 Windows 在带未读数据关闭 socket 时丢弃 403。
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if 0 < length <= MAX_BODY:
-                    self.rfile.read(length)
-            except (ValueError, TimeoutError):
+                self.drain_body(length)
+            except ValueError:
                 pass
             self.reply(403, {"error": "请求来源无效，请重新打开工作台"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
+                # 回 400 前先消费请求体，否则 Windows 关闭带未读数据的 socket
+                # 会发 RST，客户端可能在读到响应前被断连（偶发 10053）。
+                self.drain_body(length)
                 raise ValueError("请求超过限制，SQL 文件需小于 256 KB")
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
