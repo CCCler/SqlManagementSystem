@@ -41,6 +41,7 @@ function showView(name) {
     node.classList.toggle('active', active);
     if (active) node.setAttribute('aria-current', 'page'); else node.removeAttribute('aria-current');
   });
+  if (name === 'browse') renderBrowseTables();
 }
 function controls() {
   const unavailable = model.busy || !model.connected;
@@ -175,23 +176,44 @@ function resultBlock(result, index) {
   prev.onclick = () => { page--; render(); }; next.onclick = () => { page++; render(); };
   pager.append(label, prev, next); block.append(data, pager); render(); return block;
 }
+function errorBox(error, in_transaction) {
+  const box = el('div', 'error-block');
+  box.append(el('h3', '', `${error.stage} / ${error.code}`), el('p', '', error.reason));
+  if (error.position) {
+    const button = el('button', 'button small', `定位到第 ${error.position.line} 行，第 ${error.position.column} 列`);
+    button.onclick = () => locate(error.position); box.append(button);
+  }
+  if (error.expected.length) box.append(el('p', 'muted', '期望：' + error.expected.join('、')));
+  box.append(el('p', 'muted', '本批次已停止；之前自动提交的语句可能已生效。本批次不返回部分结果，请重新查询核实。'));
+  if (in_transaction) box.append(el('p', 'error-text', '当前事务已出错，请先点击「回滚」。'));
+  return box;
+}
 function renderResults(data) {
   const results = $('results'); results.replaceChildren();
   $('result-count').textContent = data.results.length;
   $('execution-meta').textContent = `${data.ok ? '执行完成' : '执行失败'} · ${data.elapsed_ms} ms`;
-  if (!data.ok) {
-    const error = data.error; const box = el('div', 'error-block');
-    box.append(el('h3', '', `${error.stage} / ${error.code}`), el('p', '', error.reason));
-    if (error.position) {
-      const button = el('button', 'button small', `定位到第 ${error.position.line} 行，第 ${error.position.column} 列`);
-      button.onclick = () => locate(error.position); box.append(button);
-    }
-    if (error.expected.length) box.append(el('p', 'muted', '期望：' + error.expected.join('、')));
-    box.append(el('p', 'muted', '本批次已停止；之前自动提交的语句可能已生效。本批次不返回部分结果，请重新查询核实。'));
-    if (data.in_transaction) box.append(el('p', 'error-text', '当前事务已出错，请先点击「回滚」。'));
-    results.append(box);
-  } else if (!data.results.length) results.append(empty('没有可执行的语句', '输入内容仅含空白或注释。'));
+  if (!data.ok) results.append(errorBox(data.error, data.in_transaction));
+  else if (!data.results.length) results.append(empty('没有可执行的语句', '输入内容仅含空白或注释。'));
   else data.results.forEach((result, index) => results.append(resultBlock(result, index)));
+}
+function renderBrowseTables() {
+  const grid = $('browse-tables'); grid.replaceChildren();
+  if (!model.tables.length) {
+    grid.append(empty(model.connected ? '还没有数据表' : '尚未连接数据库',
+      model.connected ? '先在工作台执行 CREATE TABLE，或加载入门示例。' : '连接数据库后，这里会列出所有数据表。'));
+    return;
+  }
+  for (const table of model.tables) {
+    const card = el('button', 'table-card');
+    const head = el('div', 'table-card-head');
+    head.append(icon('table'), el('strong', '', table.name));
+    head.append(el('span', 'table-card-meta', `${table.columns.length} 列`));
+    card.append(head);
+    const preview = table.columns.slice(0, 5).map(column => `${column.name} ${column.data_type}`).join(' · ');
+    card.append(el('div', 'table-card-cols', preview + (table.columns.length > 5 ? ' …' : '')));
+    card.addEventListener('click', () => { if (!model.busy) browseTable(table.name, 0); });
+    grid.append(card);
+  }
 }
 async function browseTable(tableName, offset = 0) {
   if (model.busy || !model.connected) return;
@@ -204,10 +226,10 @@ async function browseTable(tableName, offset = 0) {
     if (!('results' in data)) throw new Error(data.error.reason);
     model.compilations = data.compilations; model.cache = data.cache;
     renderCompilerSelect(); renderCache();
-    showView('workbench');
+    showView('browse');
     if (!data.ok) {
-      renderResults(data);
-      notice(data.in_transaction ? '执行失败，当前事务需要回滚。' : '执行失败，详细原因见执行结果。');
+      $('browse-content').replaceChildren(errorBox(data.error, data.in_transaction));
+      notice(data.in_transaction ? '执行失败，当前事务需要回滚。' : '执行失败，详细原因见下方。');
       return;
     }
     const result = data.results[0];
@@ -218,13 +240,11 @@ async function browseTable(tableName, offset = 0) {
   });
 }
 function renderBrowse(tableName, columns, rows, offset, pageSize, hasMore) {
-  const results = $('results'); results.replaceChildren();
-  $('result-count').textContent = '1';
+  const content = $('browse-content'); content.replaceChildren();
   const page = offset / pageSize + 1;
-  $('execution-meta').textContent = `表 ${tableName} · 第 ${page} 页`;
   const block = el('section', 'result-block');
   const heading = el('div', 'result-heading');
-  heading.append(el('span', 'success-dot', '✓'), el('strong', '', tableName), el('span', '', `${rows.length} 行`));
+  heading.append(el('span', 'success-dot', '✓'), el('strong', '', tableName), el('span', '', `${rows.length} 行 · 第 ${page} 页`));
   block.append(heading);
   const schema = model.tables.find(table => table.name === tableName);
   if (schema && schema.columns.length) {
@@ -244,7 +264,7 @@ function renderBrowse(tableName, columns, rows, offset, pageSize, hasMore) {
   next.onclick = () => browseTable(tableName, offset + pageSize);
   pager.append(label, prev, next);
   block.append(pager);
-  results.append(block);
+  content.append(block);
 }
 async function execute(selection = false, controlSql = null) {
   let sql = controlSql ?? editor.value;
@@ -326,6 +346,8 @@ function clearOutputs() {
   renderCompilerSelect(); renderCache();
   $('results').replaceChildren(empty('连接已更新', '执行 SQL 后查看当前数据库的结果。'));
   $('result-count').textContent = '0'; $('execution-meta').textContent = '尚未执行';
+  $('browse-content').replaceChildren();
+  renderBrowseTables();
 }
 async function connect(directory) {
   const data = await api('connect', {directory}); setState(data);
