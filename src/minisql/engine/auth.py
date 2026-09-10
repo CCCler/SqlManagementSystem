@@ -6,7 +6,8 @@
 授权表的持久化在 __users/__grants 系统表方案评审后接入。"""
 import hashlib
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from uuid import uuid4
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 
@@ -49,12 +50,15 @@ class Account:
     salt: bytes
     key: bytes
     is_admin: bool = False
+    iterations: int = PBKDF2_ITERATIONS
+    account_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 def create_account(name: str, password: str, is_admin: bool = False,
                    iterations: int = PBKDF2_ITERATIONS) -> Account:
     salt = generate_salt()
-    return Account(name.lower(), salt, derive_key(password, salt, iterations), is_admin)
+    return Account(name.lower(), salt, derive_key(password, salt, iterations),
+                   is_admin, iterations)
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,7 @@ class Session:
     """登录后的会话身份；授权结果不缓存，每次检查实时对照授权表。"""
 
     account: str
+    account_id: str
 
 
 class AccountStore:
@@ -77,12 +82,11 @@ class AccountStore:
             raise MiniSQLError(ErrorStage.EXECUTION, "DUPLICATE_USER", key)
         self.accounts[key] = account
 
-    def authenticate(self, name: str, password: str,
-                     iterations: int = PBKDF2_ITERATIONS) -> Session | None:
+    def authenticate(self, name: str, password: str) -> Session | None:
         account = self.accounts.get(name.lower())
-        if account is None or not verify_password(password, account.salt, account.key, iterations):
+        if account is None or not verify_password(password, account.salt, account.key, account.iterations):
             return None
-        return Session(account.name)
+        return Session(account.name, account.account_id)
 
     def grant(self, user: str, permission: str, object_kind: str, object_name: str) -> None:
         if user.lower() not in self.accounts:
@@ -102,7 +106,11 @@ class AccountStore:
     def _account(self, session: Session | None) -> Account | None:
         if session is None:
             return None
-        return self.accounts.get(session.account)
+        account = self.accounts.get(session.account)
+        # 同名重建是新身份，不能让旧会话继承其授权或管理员权限。
+        if account is None or account.account_id != session.account_id:
+            return None
+        return account
 
     def require(self, session: Session | None, permission: str,
                 object_kind: str | None = None, object_name: str | None = None) -> None:

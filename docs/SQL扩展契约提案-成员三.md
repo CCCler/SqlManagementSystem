@@ -16,7 +16,7 @@ Schema/Catalog、依赖、会话与结果四类契约的提案，以及五类"�
 | `__views` | 1 | view_id INT, view_name VARCHAR, definition VARCHAR, column_index INT, column_name VARCHAR, column_type VARCHAR |
 | `__triggers` | 2 | trigger_id INT, trigger_name VARCHAR, table_name VARCHAR, event VARCHAR, timing VARCHAR, action VARCHAR, created_at VARCHAR |
 | `__indexes` | 3 | index_id INT, index_name VARCHAR, table_name VARCHAR, unique_flag INT, column_index INT, column_name VARCHAR |
-| `__users` | 4 | user_id INT, user_name VARCHAR, salt VARCHAR, key VARCHAR, is_admin INT |
+| `__users` | 4 | user_id INT, account_id VARCHAR, user_name VARCHAR, salt VARCHAR, key VARCHAR, iterations INT, is_admin INT |
 | `__grants` | 5 | user_name VARCHAR, object_type VARCHAR, object_name VARCHAR, permission VARCHAR |
 | `__dependencies` | 6 | object_type VARCHAR, object_name VARCHAR, depends_on_type VARCHAR, depends_on_name VARCHAR |
 
@@ -40,12 +40,12 @@ Schema/Catalog、依赖、会话与结果四类契约的提案，以及五类"�
 ### 2.1 账户与密码
 
 - 密码存储：独立盐 + `hashlib.pbkdf2_hmac("sha256", ...)`（标准库，60 万次迭代，
-  参数常量化便于测试提速），验证用 `secrets.compare_digest` 防时序侧信道。
+  每个账户保存实际迭代次数，默认参数只用于新建账户），验证用 `secrets.compare_digest` 防时序侧信道。
 - 账户记录不保存明文；密码派生结果不进入查询结果、编译跟踪（--trace）与日志。
 
 ### 2.2 会话与统一入口鉴权
 
-- 登录后建立会话身份（账户名 + 是否管理员）；未登录时只能执行登录与初始化语句。
+- 登录后建立会话身份（账户名 + 不可复用的 account_id）；每次鉴权重新匹配账户身份并读取当前管理员状态。删除后同名重建必须生成新 account_id，旧会话不可恢复权限；未登录时只能执行登录与初始化语句。
 - Database 统一入口在每次 execute 前完成鉴权；视图展开、子查询、触发器动作沿
   执行上下文继承调用者身份，权限检查覆盖其访问的底层对象，不因入口不同而绕过。
 - 撤权立即生效：每次操作实时对照 `__grants` 检查，不缓存授权结果。
@@ -86,8 +86,13 @@ Schema/Catalog、依赖、会话与结果四类契约的提案，以及五类"�
 
 1. 系统表编号：固定保留段（方案 A）还是动态分配（方案 B）；旧库用户表编号重映射
    与成员二迁移方案的关系需要联合确认。
-2. UPDATE 语句本阶段何时引入（验收清单已含 UPDATE 约束验证，但功能表未列
-   UPDATE 语法）——需成员一在文法中明确，成员三据此实现执行路径。
+2. UPDATE 已在当前基线实现，支持多列旧值赋值、WHERE、事务及 EXPLAIN UPDATE；后续需在既有路径接入新增约束、索引维护与触发器，不再作为待引入语法。
 3. 新类型的显示格式细节（DECIMAL 精度、时区行为）依赖成员二的类型编码定稿。
 4. 触发器动作中的 SELECT 结果如何处理（丢弃？报错？）。
 5. 登录/初始化语句是否进入事务日志（建议：登录不进入；初始化作为普通事务提交）。
+
+## 六、原型当前接口与接入限制
+
+内存原型 Account 保存 account_id 和 iterations，authenticate(name, password) 自动使用账户保存的密码参数，不接受调用者覆盖次数。恢复账户记录时须保留这两个字段；新建同名账户时必须分配新身份。Session 仅由认证成功的服务端流程创建，不能将客户端提交的账户名或 account_id 直接当作登录凭据。
+
+上述字段已在内存原型验证，系统表结构仍属待评审提案；账户持久化、数据库统一入口与 GUI 登录尚未接入，不代表当前数据库已启用权限控制。
