@@ -13,5 +13,6 @@ minisql.journal
 minisql.journal.tmp
 minisql.lock
 *.log
+*.local-bak
 .idea/
 .vscode/

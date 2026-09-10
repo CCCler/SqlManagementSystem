@@ -65,10 +65,7 @@ db.commit()
         db.close()
 
 
-def test_recovery_can_itself_be_interrupted(tmp_path):
-    seed(tmp_path)
-    assert run_child(CRASH + "db.storage.flush(); os._exit(71)", tmp_path).returncode == 71
-    code = '''
+INTERRUPT_RECOVERY = '''
 import os, sys
 from pathlib import Path
 from minisql.storage.journal import RollbackJournal
@@ -82,7 +79,12 @@ def interrupted(self, before):
 RollbackJournal._restore = interrupted
 open_database(Path(sys.argv[1]))
 '''
-    assert run_child(code, tmp_path).returncode == 72
+
+
+def test_recovery_can_itself_be_interrupted(tmp_path):
+    seed(tmp_path)
+    assert run_child(CRASH + "db.storage.flush(); os._exit(71)", tmp_path).returncode == 71
+    assert run_child(INTERRUPT_RECOVERY, tmp_path).returncode == 72
     assert (tmp_path / "minisql.db").stat().st_size == 100
     db = open_database(tmp_path)
     try:
@@ -90,6 +92,23 @@ open_database(Path(sys.argv[1]))
         assert db.catalog.get_table("extra") is None
     finally:
         db.close()
+
+
+def test_recovery_interrupted_twice_then_completes(tmp_path):
+    """恢复过程连续两次中断后仍可完成，且不残留日志。"""
+    seed(tmp_path)
+    assert run_child(CRASH + "db.storage.flush(); os._exit(71)", tmp_path).returncode == 71
+    assert run_child(INTERRUPT_RECOVERY, tmp_path).returncode == 72
+    assert run_child(INTERRUPT_RECOVERY, tmp_path).returncode == 72
+    assert (tmp_path / "minisql.db").stat().st_size == 100
+
+    db = open_database(tmp_path)
+    try:
+        assert db.execute("SELECT * FROM t;")[0].rows == ((1,),)
+        assert db.catalog.get_table("extra") is None
+    finally:
+        db.close()
+    assert not (tmp_path / "minisql.journal").exists()
 
 
 @pytest.mark.parametrize("damage", ["truncate", "checksum", "marker"])

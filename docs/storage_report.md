@@ -12,10 +12,12 @@
 | 组件 | 文件 | 职责 |
 |---|---|---|
 | FileManager | storage/file_manager.py | 文件随机读写、同步、关闭 |
-| DiskPageManager | storage/page.py | 页分配/释放/读写、页 0 元信息、空闲页链表 |
-| RowCodec | storage/record.py | INT/VARCHAR 记录编解码 |
+| DiskPageManager | storage/page.py | 页分配/释放/读写、页 0 元信息、空闲页链表、格式版本 |
+| RowCodec | storage/record.py | 记录编解码（V1：INT/VARCHAR；V2：新增 NULL 与全部新类型） |
 | PageBufferPool | storage/buffer.py | LRU/FIFO 缓存、脏页写回、统计与替换日志 |
-| HeapStorage | storage/record.py | 表根页映射、记录插入/扫描/删除、持久化 |
+| HeapStorage | storage/record.py | 表根页映射、记录插入/扫描/删除、表结构重写、持久化 |
+| BTreeIndex | storage/index.py | 键编码、B+ 树页布局、查找/范围扫描、插入/删除/分裂/合并/页回收 |
+| MigrationTool | engine/migrate.py + cli/migrate.py | V1→V2 格式识别、备份、重建、原子替换与中断恢复 |
 | RollbackJournal | storage/journal.py | 数据库级锁、写前回滚日志、提交同步与崩溃恢复 |
 
 ## 3. 关键设计决策
@@ -43,14 +45,42 @@
 
 ### 3.4 记录编码
 
-- INT：8 字节有符号大端（>q），范围 [-2^63, 2^63-1]。
-- VARCHAR：2 字节长度前缀（按字节）+ UTF-8。
-- bool 不得当作 INT 存储；记录不跨页，单条最大 4067 字节。
+- 按格式版本分派：V1 仅 INT/VARCHAR 且无前缀；V2 每个值前有 1 字节可空标记
+  （`0x00` 有值 / `0x01` NULL），支持 NULL 与全部新类型。
+- INT：8 字节有符号大端（>q）；VARCHAR：2 字节长度前缀（按字节）+ UTF-8；
+  BOOL：1 字节；DECIMAL：长度前缀 + 十进制文本；DATE：4 字节天数；
+  TIME/TIMESTAMP：8 字节微秒数。
+- bool 不得当作 INT 存储（反之亦然）；V1 遇到新类型或 NULL 报 `TYPE_MISMATCH`。
+- 记录不跨页，单条最大 4067 字节。
 
 ### 3.5 缓冲池
 
 - 用 OrderedDict 统一实现 LRU 与 FIFO：LRU 命中 move_to_end，FIFO 命中不动。
 - 脏页淘汰前先写回；记录 CacheStats 与 ReplacementEvent 日志。
+
+### 3.6 B+ 树索引（F09）
+
+- 页类型 3/4（叶子/内部），复用页头 `next_free_page` 存内部节点 `child0`、
+  `next_data_page` 存叶子后继；全键 = 列键 + rid（叶子）/ 子页指针（内部），
+  重复列值也有唯一全键。
+- 节点体上限 4072 字节，超限分裂；非根下溢阈值 2036，借用/合并/根塌缩并回收页。
+- 键编码保序、自定界：NULL 排最前，INT/DATE/TIMESTAMP 符号翻转，VARCHAR 用
+  `0x00 0x00` 结尾并转义 `0x00`，DECIMAL 用符号 + 整数位数 + 数字串。
+- 索引页与数据页写同一文件，事务日志为整文件前映像，因此索引页随数据页一起
+  提交、回滚与崩溃恢复，无需额外协议。
+
+### 3.7 格式版本与迁移（F08/F06）
+
+- 格式版本存页 0 页头 `reserved` 字节（V1=1、V2=2），历史 0 归一化为 V1，旧库可读且
+  不被自动改写；新库写 V2。
+- `engine.migrate` 采用“识别 → 备份 → 临时文件重建 → fsync → 原子替换”，保留
+  `table_id`，中断后原库完好、可重跑且幂等；详见 [存储迁移说明](存储迁移说明.md)。
+
+### 3.8 表结构重写（F06）
+
+- `HeapStorage.rewrite_table(schema, new_schema, transform)`：整表先转换与编码，再写
+  全新页链，最后原子切换 root_page 映射并回收旧页链；失败保持旧数据不变。
+- 只提供存储层能力，不解析 SQL、不更新 Catalog；崩溃安全由调用方事务日志覆盖。
 
 ## 4. 测试记录
 
@@ -63,8 +93,18 @@
 | tests/storage/test_acceptance.py | 验收场景 | 9 |
 | tests/storage/test_reclaim.py | 删除空间回收、槽复用、页链释放 | 18 |
 | tests/storage/test_cache_experiment.py | LRU/FIFO 缓存对比实验 | 10 |
+| tests/storage/test_new_types.py | F08：NULL 与新类型编解码、BOOL/INT 区分、V1/V2 兼容 | 22 |
+| tests/storage/test_index.py | F09：键编码顺序、分裂合并、范围扫描、重复键、页回收、重开与恢复 | 30 |
+| tests/storage/test_rewrite.py | F06：表结构重写、物理结构原子替换与失败恢复 | 14 |
+| tests/storage/test_real_storage.py | F01–F05：真实文件多表扫描、变长值、新类型与 NULL 往返 | 10 |
+| tests/storage/test_migrate.py | F08/F06：V1→V2 迁移、备份、幂等、中断恢复 | 10 |
 
-<!-- 截图待补：pytest 全套 367 项通过 -->
+存储专项合计 153 项；`tests/storage/test_index.py` 与 `test_migrate.py` 中的子进程
+崩溃测试覆盖中断与恢复再次中断。以上为本地实测收集数（2026-09-10，Python 3.12 /
+pytest 8.3）。
+（另：索引与全表扫描的性能证据见 [F09 索引接口约定](F09索引接口约定-成员二.md) 第 6 节。）
+
+<!-- 截图待补：pytest 全套 723 项通过 -->
 ![全套测试通过截图](assets/pytest-suite.png)
 
 ### 4.2 验收场景
@@ -177,12 +217,34 @@
 5. **删除的 O(N·页数) 归属校验**：`delete` 为校验 `RecordId` 归属每次从根页遍历
    到目标页。通过在页头 `reserved` 区持久化 `table_id`，删除直接定位并 O(1)
    校验，消除平方增长，详见 4.4。
+6. **旧格式兼容而不迁移**：新类型与 NULL 需要每值前缀，直接改旧记录编码会破坏旧库。
+   解决为版本化编解码（V1/V2）+ 页 0 页头 `reserved` 字节承载版本号（历史文件恒 0，
+   归一化为 V1），旧库原样可读、不自动改写。
+7. **表结构变更的失败安全**：`rewrite_table` 先完成整表转换与编码，再写新页链，最后
+   切换根页映射并回收旧页链；任何类型/转换错误都不触碰旧结构，旧数据可继续读写。
+8. **迁移的中断安全与幂等**：迁移在临时文件内重建，`fsync` 后原子替换；替换前原库
+   完好，重跑自动清理残留并重新迁移，已迁移库再次调用为空操作；存在未处理事务日志
+   时拒绝迁移，避免把未恢复的数据当作基线。
 
 ## 6. 结论与小结
 
 存储层已独立完成并通过全部单元测试与验收场景，可支撑上层执行引擎的
 RecordStorage 协议调用。与编译器、执行引擎联调后，建表、插入、扫描、删除、
-关闭重开、事务与崩溃恢复均在真实文件中通过，全套 367 项测试通过、无跳过。
+关闭重开、事务与崩溃恢复均在真实文件中通过。
+
+本轮 SQL 扩展的存储交付：
+
+- **F08**：V1/V2 版本化编解码、NULL 与 BOOL/DECIMAL/DATE/TIME/TIMESTAMP，
+  严格区分 BOOL/INT；
+- **F06**：`rewrite_table` 表结构重写与物理结构原子替换、失败保持旧数据；
+- **F06/F08**：V1→V2 迁移工具（备份、原子替换、中断可重跑、幂等、保留 table_id）；
+- **F09**：B+ 树页布局、键编码、查找、分裂、合并、页回收与索引增删扫描接口；
+- **F01–F05**：真实文件夹具，验证多表扫描、变长值与新类型往返。
+
+真实文件重开、跨页与容量边界、损坏输入、迁移中断、恢复再次中断均已由专项测试覆盖
+（`tests/storage/test_new_types.py`、`test_index.py`、`test_rewrite.py`、
+`test_real_storage.py`、`test_migrate.py` 与 `tests/integration/test_recovery.py`）。
+本地实测：存储专项 153 项、全套 723 项通过、无跳过（2026-09-10）。
 大规模基准曾暴露插入与删除的 O(N²) 问题，已分别通过插入候选页指针与页头
 归属校验修复，插入与删除均近似线性。
 
