@@ -1,5 +1,5 @@
-from minisql.contracts.ast import CreateTableStmt, DropTableStmt, ExplainStmt, InsertStmt, SelectStmt, TransactionStmt
-from minisql.contracts.plans import CreateTable, Delete, DropTable, Explain, Filter, Insert, Plan, Project, SemanticResult, SeqScan, TransactionControl
+from minisql.contracts.ast import UpdateStmt, CreateTableStmt, DropTableStmt, ExplainStmt, InsertStmt, SelectStmt, TransactionStmt
+from minisql.contracts.plans import Update, CreateTable, Delete, DropTable, Explain, Filter, Insert, Plan, Project, SemanticResult, SeqScan, TransactionControl
 
 
 class Planner:
@@ -30,4 +30,6 @@ class Planner:
                 order_by=order_by,
                 offset=statement.offset,
             )
+        if isinstance(statement, UpdateStmt):
+            return Update(schema, tuple((a.column.name, a.value) for a in statement.assignments), source)
         return Delete(schema, source)

@@ -1,6 +1,6 @@
 from dataclasses import replace
 from minisql.contracts.ast import (
-    CreateTableStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt, Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
+    UpdateStmt, CreateTableStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt, Literal, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogReader
@@ -41,6 +41,8 @@ class SemanticAnalyzer:
         table = identifier(statement.table)
         if isinstance(statement, DropTableStmt) and table.name == "__catalog":
             fail("PROTECTED_TABLE", "不能删除系统目录表", table.position)
+        if isinstance(statement, UpdateStmt) and table.name == "__catalog":
+            fail("PROTECTED_TABLE", "不能更新系统目录表", table.position)
         schema = catalog.get_table(table.name)
         if schema is None:
             fail("UNKNOWN_TABLE", f"未知表：{table.name}", table.position)
@@ -112,6 +114,20 @@ class SemanticAnalyzer:
                 if kind is not DataType.BOOL:
                     fail("TYPE_MISMATCH", "WHERE 必须为 BOOL", where.position)
             bound = replace(statement, table=table, where=where)
+            if isinstance(bound, UpdateStmt):
+                if schema.table_id == 0:
+                    fail("PROTECTED_TABLE", "不能更新系统目录表", table.position)
+                assignments, seen = [], set()
+                for assignment in bound.assignments:
+                    target = column(assignment.column)
+                    if target.name in seen:
+                        fail("DUPLICATE_COLUMN", f"重复赋值列：{target.name}", target.position)
+                    seen.add(target.name)
+                    value, kind = expression(assignment.value)
+                    if kind is not column_types[target.name]:
+                        fail("TYPE_MISMATCH", f"列 {target.name} 的值类型不匹配", value.position)
+                    assignments.append(replace(assignment, column=target, value=value))
+                bound = replace(bound, assignments=tuple(assignments))
             if isinstance(bound, SelectStmt):
                 if bound.columns is not None:
                     bound = replace(bound, columns=tuple(column(c) for c in bound.columns))

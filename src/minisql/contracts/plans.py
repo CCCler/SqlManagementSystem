@@ -53,6 +53,13 @@ class Delete:
 
 
 @dataclass(frozen=True)
+class Update:
+    schema: TableSchema
+    assignments: tuple[tuple[str, Expression], ...]
+    source: SeqScan | Filter | EmptyScan
+
+
+@dataclass(frozen=True)
 class DropTable:
     schema: TableSchema
 
@@ -67,7 +74,7 @@ class Explain:
     plan: "Plan"
 
 
-Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete | DropTable | TransactionControl | Explain
+Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete | Update | DropTable | TransactionControl | Explain
 
 
 @dataclass(frozen=True)

@@ -168,7 +168,7 @@ function renderTables() {
 function highlight() {
   const sql = editor.value;
   const fragment = document.createDocumentFragment();
-  const regex = /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*(?:'|$)|\b(?:CREATE|TABLE|INSERT|INTO|VALUES|SELECT|DISTINCT|FROM|WHERE|ORDER|BY|ASC|DESC|DELETE|DROP|EXPLAIN|LIMIT|OFFSET|BEGIN|COMMIT|ROLLBACK|INT|VARCHAR|BOOL|TRUE|FALSE|AND|OR|NOT)\b|\b\d+\b)/gi;
+  const regex = /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*(?:'|$)|\b(?:CREATE|TABLE|INSERT|INTO|VALUES|SELECT|DISTINCT|FROM|WHERE|ORDER|BY|ASC|DESC|DELETE|UPDATE|SET|DROP|EXPLAIN|LIMIT|OFFSET|BEGIN|COMMIT|ROLLBACK|INT|VARCHAR|BOOL|TRUE|FALSE|AND|OR|NOT)\b|\b\d+\b)/gi;
   let end = 0;
   for (const match of sql.matchAll(regex)) {
     fragment.append(document.createTextNode(sql.slice(end, match.index)));

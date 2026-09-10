@@ -8,6 +8,15 @@
 
 ## 开始使用
 
+首次从 GitHub 获取项目，请先阅读 [系统使用说明](docs/系统使用说明.md)。在准备保存项目的位置打开终端：
+
+```powershell
+git clone https://github.com/CCCler/SqlManagementSystem.git
+cd SqlManagementSystem
+```
+
+也可在仓库页面选择 **Code → Download ZIP**，完整解压后进入包含 `pyproject.toml` 和 `start_gui.cmd` 的文件夹。下文的“项目根目录”指你本机的这个文件夹，不要求固定盘符。仓库不包含 `.venv` 和运行数据库，首次使用需在本机准备。
+
 ### 图形工作台（GitHub 深色风格）
 
 在项目根目录双击 **`start_gui.cmd`**，即可启动本地服务并自动打开浏览器。
@@ -18,7 +27,7 @@
 Token/AST/执行计划分析及真实缓存统计。示例仅填入编辑器，点击运行才执行。
 
 ```powershell
-# 也可从项目根目录启动；Ctrl+C 关闭服务
+# 先完成下文“环境安装”，再从项目根目录启动；Ctrl+C 关闭服务
 .\.venv\Scripts\python.exe -m minisql.gui
 # 自定义数据库与端口
 .\.venv\Scripts\python.exe -m minisql.gui --data-dir .\data\practice --port 8767
@@ -33,12 +42,14 @@ Token/AST/执行计划分析及真实缓存统计。示例仅填入编辑器，�
 首次安装时，在 Windows PowerShell 执行以下命令（需已安装 Python 3.11+）。已有 `.venv` 且已安装项目时可直接启动，无需重复创建环境：
 
 ```powershell
-cd E:\zch_Projects\sql_project
+# 在克隆或解压后的项目根目录执行
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m minisql --help
 .\.venv\Scripts\minisql.exe --version
 ```
+
+上述命令无需激活虚拟环境。需要运行测试时，再执行 `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"` 安装测试依赖。图形界面也可在安装好 Python 3.11+ 及 `py` 启动器后直接双击启动脚本试用。
 
 ### 交互使用
 
@@ -153,7 +164,7 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 ## 已实现能力与限制
 
 - 支持 `BEGIN`、`COMMIT`、`ROLLBACK`，默认每条 SQL 自动提交；支持多个连接和进程串行访问同一数据库。
-- 支持 `CREATE TABLE`、`INSERT`、单表 `SELECT`、`DELETE`、`DROP TABLE`，以及过滤、投影、`SELECT *`、`SELECT DISTINCT` 去重、`ORDER BY` 排序和 `LIMIT`/`OFFSET` 截断分页。
+- 支持 `CREATE TABLE`、`INSERT`、单表 `SELECT`、`DELETE`、`UPDATE`、`DROP TABLE`，以及过滤、投影、`SELECT *`、`SELECT DISTINCT` 去重、`ORDER BY` 排序和 `LIMIT`/`OFFSET` 截断分页。
 - 表列支持有符号 64 位 `INT` 和 `VARCHAR`；`BOOL` 仅用于表达式。
 - 支持加减、比较、括号及 `NOT/AND/OR`；实现常量折叠、布尔化简并保留优化前后计划。
 - 优化器对恒真 `WHERE` 消除 Filter，对恒假 `WHERE` 生成空结果计划（不扫描用户表，SELECT 保留结果列、DELETE 零影响行）。注意：事务整库前映像日志与缓存重建成本不因用户表扫描减少而降低，两者统计口径不同。
@@ -162,7 +173,7 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 - SQL 必须以分号结束；`INSERT` 必须列出全部列，允许重排。支持 `--` 和非嵌套 `/* */` 注释。
 - 使用 4KB 页、LRU/FIFO 缓存、脏页写回；表结构和记录持久化，支持正常重启及写前回滚日志恢复。
 - DELETE 后自动整理页内记录并回收空间，插入优先复用空槽和空闲空间；存活记录的 RecordId 保持不变。空页留给同表复用，数据库文件不主动缩小；DROP TABLE 才释放整表页供其他表复用。
-- 不支持 `UPDATE`、`JOIN`、`GROUP BY`、`NULL`、浮点数和 `VARCHAR(n)`；索引尚未实现。事务采用整库独占锁与完整文件前映像日志，不支持行锁、MVCC、嵌套事务或保存点。
+- 不支持 `JOIN`、`GROUP BY`、`NULL`、浮点数和 `VARCHAR(n)`；索引尚未实现。事务采用整库独占锁与完整文件前映像日志，不支持行锁、MVCC、嵌套事务或保存点。
 
 待办包括报告复核、测试截图和答辩材料整理。
 
@@ -205,3 +216,20 @@ $testTemp = Join-Path (Get-Location) ('.test-tmp-' + [guid]::NewGuid().ToString(
 开始工作前先同步远程；提交后执行 `git pull --rebase origin main`，处理可能的冲突并确认测试通过，再执行 `git push origin main`。
 公共接口变更先在组内沟通，避免同时修改同一文件；推送被拒绝时先同步再重试，不强制推送。
 运行数据默认放 `data/`，虚拟环境、数据、日志和缓存均被 Git 忽略。
+
+## 更新已有记录（UPDATE）
+
+在图形工作台 SQL 编辑器或命令行中运行：
+
+```sql
+UPDATE student SET name = 'Alice Chen', age = age + 1 WHERE id = 1;
+SELECT * FROM student ORDER BY id;
+```
+
+可一次修改多列，右侧支持常量、已有字段及整数加减；所有赋值读取更新前的行。例如 `SET id = age, age = id` 会交换两个字段的旧值。字段类型必须一致，同一字段不能重复赋值。
+
+省略 `WHERE` 会更新全表。影响行数是条件匹配的行数，即使新值与旧值相同也计数。可先运行 `EXPLAIN UPDATE student SET age = age + 1 WHERE id = 1;` 查看计划，图形界面也可在“编译分析”查看实际计划。
+
+UPDATE 沿用自动提交规则；需要确认结果后再保存时，先执行 `BEGIN;`，更新和查询后执行 `COMMIT;` 或 `ROLLBACK;`。显式事务出错后必须回滚。更新可能改变记录的存储位置，查询需要固定顺序时请使用 `ORDER BY`。
+
+`UPDATE` 和 `SET` 现在是保留关键字，不能用作表名或列名。

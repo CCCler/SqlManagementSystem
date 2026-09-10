@@ -2,7 +2,7 @@ from dataclasses import replace
 import operator
 from minisql.contracts.ast import BinaryExpr, Literal, UnaryExpr
 from minisql.contracts.models import DataType
-from minisql.contracts.plans import Delete, EmptyScan, Explain, Filter, Plan, Project, QueryPlan, SeqScan
+from minisql.contracts.plans import Update, Delete, EmptyScan, Explain, Filter, Plan, Project, QueryPlan, SeqScan
 
 
 OPERATIONS = {
@@ -37,6 +37,9 @@ class Optimizer:
                 # 恒假：生成空结果计划，执行时不再扫描用户表。
                 return EmptyScan(_plan_columns(plan.source))
             return replace(plan, predicate=predicate, source=self.optimize(plan.source))
+        if isinstance(plan, Update):
+            return replace(plan, assignments=tuple((name, _fold(value)) for name, value in plan.assignments),
+                           source=self.optimize(plan.source))
         if isinstance(plan, (Project, Delete)):
             return replace(plan, source=self.optimize(plan.source))
         return replace(plan)

@@ -8,7 +8,7 @@ from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import CatalogWriter, RecordStorage
 from minisql.contracts.models import ExecutionResult, Row, StoredRecord, Value
 from minisql.contracts.plans import (
-    CreateTable, Delete, DropTable, EmptyScan, Explain, Filter, Insert, Plan, Project,
+    Update, CreateTable, Delete, DropTable, EmptyScan, Explain, Filter, Insert, Plan, Project,
     QueryPlan, SeqScan, TransactionControl,
 )
 
@@ -75,6 +75,9 @@ def render_plan(plan: Plan) -> str:
         if plan.offset is not None:
             line += f" OFFSET {plan.offset}"
         return line + "\n" + _indent(render_plan(plan.source))
+    if isinstance(plan, Update):
+        assignments = ", ".join(f"{name} = {_render_expr(value)}" for name, value in plan.assignments)
+        return f"Update({plan.schema.name}, {assignments})\n" + _indent(render_plan(plan.source))
     if isinstance(plan, Delete):
         return f"Delete({plan.schema.name})\n" + _indent(render_plan(plan.source))
     if isinstance(plan, CreateTable):
@@ -102,6 +105,8 @@ class PlanExecutor:
             return self._drop_table(plan)
         if isinstance(plan, Insert):
             return self._insert(plan)
+        if isinstance(plan, Update):
+            return self._update(plan)
         if isinstance(plan, Delete):
             return self._delete(plan)
         if isinstance(plan, (SeqScan, Filter, Project, EmptyScan)):
@@ -132,6 +137,28 @@ class PlanExecutor:
         self.catalog.unregister_table(current.name)
         self.storage.flush()
         return ExecutionResult(message=f"表 {current.name} 已删除")
+
+    def _update(self, plan: Update) -> ExecutionResult:
+        if not isinstance(plan.source, (SeqScan, Filter, EmptyScan)):
+            raise _execution_error("UNKNOWN_PLAN", "UPDATE 源必须保留 RecordId")
+        if plan.schema.table_id == 0 or plan.schema.name.lower() == "__catalog":
+            raise _execution_error("PROTECTED_TABLE", "不能更新系统目录表")
+        indexes = {c.name: i for i, c in enumerate(plan.schema.columns)}
+        replacements = []
+        # 固定原记录集合，在写入前完成求值；多列赋值始终读取旧行。
+        for record in self._scan_records(plan.source):
+            row = list(record.row)
+            for name, expression in plan.assignments:
+                row[indexes[name]] = self._eval(expression, record.row, indexes)
+            replacements.append((record.record_id, tuple(row)))
+        for record_id, row in replacements:
+            # 复用堆存储支持变长记录迁移；事务日志负责整条语句的失败恢复。
+            # 先插入再删除，不改变尚未更新记录的槽编号。
+            self.storage.insert(plan.schema, row)
+            self.storage.delete(plan.schema, record_id)
+        self.storage.flush()
+        count = len(replacements)
+        return ExecutionResult(affected_rows=count, message=f"已更新 {count} 行")
 
     def _delete(self, plan: Delete) -> ExecutionResult:
         if not isinstance(plan.source, (SeqScan, Filter, EmptyScan)):

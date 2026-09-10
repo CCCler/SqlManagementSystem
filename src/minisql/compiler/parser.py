@@ -1,5 +1,5 @@
 from minisql.contracts.ast import (
-    BinaryExpr, CreateTableStmt, DeleteStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt,
+    Assignment, UpdateStmt, BinaryExpr, CreateTableStmt, DeleteStmt, DropTableStmt, ExplainStmt, Identifier, InsertStmt,
     Literal, OrderTerm, SelectStmt, Statement, TransactionStmt, UnaryExpr,
 )
 from minisql.contracts.errors import ErrorStage, MiniSQLError
@@ -95,11 +95,13 @@ class _Parser:
             result = self.select_body(position)
         elif self.matches("DELETE"):
             result = self.delete_body(position)
+        elif self.matches("UPDATE"):
+            result = self.update_body(position)
         elif self.matches("EXPLAIN"):
             self.take()
             result = ExplainStmt(self.explain_target(), position)
         else:
-            self.error("CREATE", "INSERT", "SELECT", "DELETE", "DROP", "EXPLAIN", "BEGIN", "COMMIT", "ROLLBACK")
+            self.error("CREATE", "INSERT", "SELECT", "DELETE", "UPDATE", "DROP", "EXPLAIN", "BEGIN", "COMMIT", "ROLLBACK")
         self.expect(";")
         if self.current.type is not TokenType.EOF or self.index != len(self.tokens) - 1:
             self.error("EOF")
@@ -138,12 +140,27 @@ class _Parser:
         table = self.identifier()
         return DeleteStmt(table, self.where(), position)
 
+    def update_body(self, position):
+        self.take()  # UPDATE
+        table = self.identifier()
+        self.expect("SET")
+        assignments = self.separated(self.assignment)
+        return UpdateStmt(table, assignments, self.where(), position)
+
+    def assignment(self):
+        column = self.identifier()
+        self.expect("=")
+        self.check_expression_complexity()
+        return Assignment(column, self.or_expr())
+
     def explain_target(self):
         if self.matches("SELECT"):
             return self.select_body(self.current.position)
         if self.matches("DELETE"):
             return self.delete_body(self.current.position)
-        self.error("SELECT", "DELETE")
+        if self.matches("UPDATE"):
+            return self.update_body(self.current.position)
+        self.error("SELECT", "DELETE", "UPDATE")
 
     def limit_clause(self):
         if not self.matches("LIMIT"):
@@ -181,21 +198,27 @@ class _Parser:
     def where(self):
         if self.matches("WHERE"):
             self.take()
-            # 在任何递归前预算结构量，同时约束括号、NOT 及左深二元表达式树。
-            # 只计结构 Token，字符串内容和标识符长度不计入。
-            complexity = 0
-            for token in self.tokens[self.index:]:
-                if (token.type is TokenType.OPERATOR or
-                        token.type is TokenType.DELIMITER and token.lexeme == "(" or
-                        token.type is TokenType.KEYWORD and token.lexeme.upper() in ("NOT", "AND", "OR")):
-                    complexity += 1
-                    if complexity > MAX_EXPRESSION_COMPLEXITY:
-                        raise MiniSQLError(
-                            ErrorStage.SYNTAX, "EXPRESSION_TOO_COMPLEX",
-                            f"WHERE 表达式的左括号与运算符总数最多为 {MAX_EXPRESSION_COMPLEXITY}，请简化表达式",
-                            token.position, ("SIMPLER_EXPRESSION",))
+            self.check_expression_complexity()
             return self.or_expr()
         return None
+
+    def check_expression_complexity(self):
+        # 在递归前计数；SET 的每个赋值和 WHERE 各自受限。
+        complexity = 0
+        for token in self.tokens[self.index:]:
+            if token.lexeme in (",", ";") and token.type is TokenType.DELIMITER:
+                break
+            if token.type is TokenType.KEYWORD and token.lexeme.upper() == "WHERE":
+                break
+            if (token.type is TokenType.OPERATOR or
+                    token.type is TokenType.DELIMITER and token.lexeme == "(" or
+                    token.type is TokenType.KEYWORD and token.lexeme.upper() in ("NOT", "AND", "OR")):
+                complexity += 1
+                if complexity > MAX_EXPRESSION_COMPLEXITY:
+                    raise MiniSQLError(
+                        ErrorStage.SYNTAX, "EXPRESSION_TOO_COMPLEX",
+                        f"表达式的左括号与运算符总数最多为 {MAX_EXPRESSION_COMPLEXITY}，请简化表达式",
+                        token.position, ("SIMPLER_EXPRESSION",))
 
     def chain(self, reader, operators):
         left = reader()

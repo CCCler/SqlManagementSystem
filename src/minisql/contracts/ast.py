@@ -74,6 +74,20 @@ class DeleteStmt:
 
 
 @dataclass(frozen=True)
+class Assignment:
+    column: Identifier
+    value: Expression
+
+
+@dataclass(frozen=True)
+class UpdateStmt:
+    table: Identifier
+    assignments: tuple[Assignment, ...]
+    where: Expression | None
+    position: SourcePosition
+
+
+@dataclass(frozen=True)
 class DropTableStmt:
     table: Identifier
     position: SourcePosition
@@ -91,4 +105,4 @@ class ExplainStmt:
     position: SourcePosition
 
 
-Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | DropTableStmt | TransactionStmt | ExplainStmt
+Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | UpdateStmt | DropTableStmt | TransactionStmt | ExplainStmt
