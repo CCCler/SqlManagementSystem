@@ -72,7 +72,7 @@
       <article class="panel help-content">
         <h2>01 · 连接你的数据库</h2><p>默认打开项目下的 <code>data/gui</code>。通过右上角「管理连接」输入其他本地目录；不存在的目录会被创建。每个页面拥有独立连接，修改目录前需提交或回滚事务。</p>
         <h2>02 · 编写与运行 SQL</h2><p>点击「加载示例」可填入建表、插入和查询语句，示例不会自动运行。已有同名表时，再次建表会报错。SQL 以分号结尾，支持多条语句。Ctrl+Enter 运行选中内容，无选区时运行全部；Tab 插入两个空格。</p>
-        <p>支持 <code>CREATE TABLE</code>、<code>INSERT</code>、<code>SELECT</code>、<code>DELETE</code>、<code>DROP TABLE</code>、<code>EXPLAIN SELECT</code> 和事务语句。查询支持 <code>WHERE</code>、<code>DISTINCT</code>、<code>ORDER BY</code>、<code>LIMIT</code>；字段类型为 <code>INT</code>、<code>VARCHAR</code>，布尔常量可用于表达式。INSERT 必须列出全部列名。暂不支持 UPDATE、JOIN。</p>
+        <p>支持 <code>CREATE TABLE</code>、<code>INSERT</code>、<code>SELECT</code>、<code>DELETE</code>、<code>DROP TABLE</code>、<code>EXPLAIN SELECT</code> 和事务语句。查询支持 <code>WHERE</code>、<code>DISTINCT</code>、<code>ORDER BY</code>、<code>LIMIT</code>/<code>OFFSET</code>；字段类型为 <code>INT</code>、<code>VARCHAR</code>，布尔常量可用于表达式。INSERT 必须列出全部列名。侧边栏点击「浏览数据」可直接查看表数据。暂不支持 UPDATE、JOIN。</p>
         <h2>03 · 理解事务与错误</h2><p>默认每条 SQL 自动提交。批次遇错停止后续执行，之前自动提交的语句仍可能已生效；失败批次不返回部分结果，可重新查询核实。显式事务发生错误后必须回滚，不能继续提交。</p>
         <p>断开连接、关闭页面或关闭服务会尝试回滚未提交事务。页面异常离开时，最长 30 分钟空闲后释放连接；没有提交的事务不要长时间搁置。多个页面访问同一数据库时，未结束的事务可能使其他页面遇到锁超时。</p>
         <h2>04 · 观察编译与缓存</h2><p>运行 SQL 后可切换到「编译分析」查看成功编译的语句。编译成功不代表执行或提交成功；失败阶段以执行结果中的错误为准。「缓存统计」显示引擎真实页缓存快照，目录刷新不替换最近执行的展示数据。</p>

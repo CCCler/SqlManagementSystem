@@ -14,7 +14,8 @@ insert      = "INSERT" "INTO" identifier "(" identifier { "," identifier } ")"
               "VALUES" "(" literal { "," literal } ")" ";" ;
 select      = "SELECT" [ "DISTINCT" ] ( "*" | identifier { "," identifier } )
               "FROM" identifier [ "WHERE" expression ]
-              [ "ORDER" "BY" order_term { "," order_term } ] [ "LIMIT" integer ] ";" ;
+              [ "ORDER" "BY" order_term { "," order_term } ]
+              [ "LIMIT" integer [ "OFFSET" integer ] ] ";" ;
 order_term  = identifier [ "ASC" | "DESC" ] ;
 delete      = "DELETE" "FROM" identifier [ "WHERE" expression ] ";" ;
 explain     = "EXPLAIN" ( select | delete ) ";" ;
@@ -37,9 +38,9 @@ TRUE/FALSE 及整数加减用于验证布尔化简与常量折叠；不增加 BO
 WHERE 必须为 BOOL；不支持连续比较 a < b < c，不支持 NULL、JOIN、UPDATE、浮点数或 VARCHAR(n)。
 INSERT 必须列出全部表列，不允许重复，允许重排；缺分号必须报语法错误。
 
-SELECT 可选 DISTINCT 去重、ORDER BY 排序与 LIMIT 截断；执行顺序为投影 → DISTINCT → ORDER BY → LIMIT。
+SELECT 可选 DISTINCT 去重、ORDER BY 排序与 LIMIT/OFFSET 截断；执行顺序为投影 → DISTINCT → ORDER BY → LIMIT/OFFSET。
 ORDER BY 支持多列排序，逐列可选 ASC（默认）或 DESC，排序列必须出现在投影列中。
-DISTINCT 在投影后执行、先于 ORDER BY，LIMIT 后必须是非负整数字面量。
+LIMIT 与 OFFSET 后必须是非负整数字面量；OFFSET 表示跳过前 N 行，只能跟在 LIMIT 之后，不能单独出现。
 EXPLAIN 只编译不执行，仅渲染优化后的计划树；语义检查仍先执行，未知表/列与类型错误照常报告。
 运行时加减运算结果超出有符号 64 位范围时报 EXECUTION:INTEGER_OUT_OF_RANGE，与语义分析及常量折叠一致。
 

@@ -153,7 +153,7 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 ## 已实现能力与限制
 
 - 支持 `BEGIN`、`COMMIT`、`ROLLBACK`，默认每条 SQL 自动提交；支持多个连接和进程串行访问同一数据库。
-- 支持 `CREATE TABLE`、`INSERT`、单表 `SELECT`、`DELETE`、`DROP TABLE`，以及过滤、投影、`SELECT *`、`SELECT DISTINCT` 去重、`ORDER BY` 排序和 `LIMIT` 截断。
+- 支持 `CREATE TABLE`、`INSERT`、单表 `SELECT`、`DELETE`、`DROP TABLE`，以及过滤、投影、`SELECT *`、`SELECT DISTINCT` 去重、`ORDER BY` 排序和 `LIMIT`/`OFFSET` 截断分页。
 - 表列支持有符号 64 位 `INT` 和 `VARCHAR`；`BOOL` 仅用于表达式。
 - 支持加减、比较、括号及 `NOT/AND/OR`；实现常量折叠、布尔化简并保留优化前后计划。
 - 优化器对恒真 `WHERE` 消除 Filter，对恒假 `WHERE` 生成空结果计划（不扫描用户表，SELECT 保留结果列、DELETE 零影响行）。注意：事务整库前映像日志与缓存重建成本不因用户表扫描减少而降低，两者统计口径不同。

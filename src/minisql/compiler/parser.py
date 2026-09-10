@@ -120,8 +120,17 @@ class _Parser:
         table = self.identifier()
         where = self.where()
         order_by = self.order_by_clause()
-        limit = self.limit_clause()
-        return SelectStmt(table, columns, where, position, distinct, limit, order_by)
+        limit, offset = self.limit_clause()
+        return SelectStmt(
+            table=table,
+            columns=columns,
+            where=where,
+            position=position,
+            distinct=distinct,
+            limit=limit,
+            order_by=order_by,
+            offset=offset,
+        )
 
     def delete_body(self, position):
         self.take()  # DELETE
@@ -137,15 +146,23 @@ class _Parser:
         self.error("SELECT", "DELETE")
 
     def limit_clause(self):
-        if self.matches("LIMIT"):
+        if not self.matches("LIMIT"):
+            return None, None
+        self.take()
+        limit = self._non_negative_integer()
+        offset = None
+        if self.matches("OFFSET"):
             self.take()
-            token = self.current
-            if token.type is TokenType.CONST and token.lexeme.isascii() and token.lexeme.isdigit():
-                self.take()
-                digits = token.lexeme.lstrip("0") or "0"
-                return int(digits) if len(digits) <= 19 else 2 ** 63
-            self.error("INTEGER")
-        return None
+            offset = self._non_negative_integer()
+        return limit, offset
+
+    def _non_negative_integer(self):
+        token = self.current
+        if token.type is TokenType.CONST and token.lexeme.isascii() and token.lexeme.isdigit():
+            self.take()
+            digits = token.lexeme.lstrip("0") or "0"
+            return int(digits) if len(digits) <= 19 else 2 ** 63
+        self.error("INTEGER")
 
     def order_by_clause(self):
         if not self.matches("ORDER"):

@@ -106,16 +106,16 @@ function renderTables() {
     for (const column of table.columns) {
       const row = el('div', 'column'); row.append(el('span', '', column.name), el('small', '', column.data_type)); details.append(row);
     }
-    const query = el('button', 'table-query', '查看前 100 行 →');
+    const query = el('button', 'table-query', '浏览数据 →');
     query.disabled = model.busy;
-    query.addEventListener('click', () => { if (!model.busy) { setSql(`SELECT * FROM ${table.name} LIMIT 100;\n`); showView('workbench'); editor.focus(); notice('已填入查询，点击运行后读取数据。'); } });
+    query.addEventListener('click', () => { if (!model.busy) browseTable(table.name, 0); });
     details.append(query); list.append(details);
   }
 }
 function highlight() {
   const sql = editor.value;
   const fragment = document.createDocumentFragment();
-  const regex = /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*(?:'|$)|\b(?:CREATE|TABLE|INSERT|INTO|VALUES|SELECT|DISTINCT|FROM|WHERE|ORDER|BY|ASC|DESC|DELETE|DROP|EXPLAIN|LIMIT|BEGIN|COMMIT|ROLLBACK|INT|VARCHAR|BOOL|TRUE|FALSE|AND|OR|NOT)\b|\b\d+\b)/gi;
+  const regex = /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*(?:'|$)|\b(?:CREATE|TABLE|INSERT|INTO|VALUES|SELECT|DISTINCT|FROM|WHERE|ORDER|BY|ASC|DESC|DELETE|DROP|EXPLAIN|LIMIT|OFFSET|BEGIN|COMMIT|ROLLBACK|INT|VARCHAR|BOOL|TRUE|FALSE|AND|OR|NOT)\b|\b\d+\b)/gi;
   let end = 0;
   for (const match of sql.matchAll(regex)) {
     fragment.append(document.createTextNode(sql.slice(end, match.index)));
@@ -192,6 +192,59 @@ function renderResults(data) {
     results.append(box);
   } else if (!data.results.length) results.append(empty('没有可执行的语句', '输入内容仅含空白或注释。'));
   else data.results.forEach((result, index) => results.append(resultBlock(result, index)));
+}
+async function browseTable(tableName, offset = 0) {
+  if (model.busy || !model.connected) return;
+  const pageSize = 50;
+  await task(async () => {
+    // 多取一行判断是否还有下一页，避免依赖尚未实现的 COUNT。
+    const sql = `SELECT * FROM ${tableName} LIMIT ${pageSize + 1} OFFSET ${offset};`;
+    const data = await api('execute', {sql});
+    setState(data);
+    if (!('results' in data)) throw new Error(data.error.reason);
+    model.compilations = data.compilations; model.cache = data.cache;
+    renderCompilerSelect(); renderCache();
+    showView('workbench');
+    if (!data.ok) {
+      renderResults(data);
+      notice(data.in_transaction ? '执行失败，当前事务需要回滚。' : '执行失败，详细原因见执行结果。');
+      return;
+    }
+    const result = data.results[0];
+    const rows = result.rows || [];
+    const hasMore = rows.length > pageSize;
+    const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+    renderBrowse(tableName, result.columns, pageRows, offset, pageSize, hasMore);
+  });
+}
+function renderBrowse(tableName, columns, rows, offset, pageSize, hasMore) {
+  const results = $('results'); results.replaceChildren();
+  $('result-count').textContent = '1';
+  const page = offset / pageSize + 1;
+  $('execution-meta').textContent = `表 ${tableName} · 第 ${page} 页`;
+  const block = el('section', 'result-block');
+  const heading = el('div', 'result-heading');
+  heading.append(el('span', 'success-dot', '✓'), el('strong', '', tableName), el('span', '', `${rows.length} 行`));
+  block.append(heading);
+  const schema = model.tables.find(table => table.name === tableName);
+  if (schema && schema.columns.length) {
+    const fields = schema.columns.map(column => `${column.name} ${column.data_type}`).join('，');
+    block.append(el('div', 'info-box', `字段：${fields}`));
+  }
+  block.append(tableElement(columns, rows, offset));
+  if (!rows.length) block.append(el('div', 'result-message', offset > 0 ? '本页没有数据，可能已到末尾。' : '表中还没有数据。'));
+  const pager = el('div', 'pagination');
+  const prev = el('button', 'button small', '上一页');
+  const next = el('button', 'button small', '下一页');
+  const label = el('span');
+  label.textContent = `第 ${page} 页 · 本页 ${rows.length} 行`;
+  prev.disabled = offset === 0 || model.busy;
+  next.disabled = !hasMore || model.busy;
+  prev.onclick = () => browseTable(tableName, Math.max(0, offset - pageSize));
+  next.onclick = () => browseTable(tableName, offset + pageSize);
+  pager.append(label, prev, next);
+  block.append(pager);
+  results.append(block);
 }
 async function execute(selection = false, controlSql = null) {
   let sql = controlSql ?? editor.value;

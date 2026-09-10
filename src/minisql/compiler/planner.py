@@ -28,5 +28,6 @@ class Planner:
                 distinct=statement.distinct,
                 limit=statement.limit,
                 order_by=order_by,
+                offset=statement.offset,
             )
         return Delete(schema, source)

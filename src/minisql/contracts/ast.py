@@ -63,6 +63,7 @@ class SelectStmt:
     distinct: bool = False
     limit: int | None = None
     order_by: tuple[OrderTerm, ...] = ()
+    offset: int | None = None
 
 
 @dataclass(frozen=True)

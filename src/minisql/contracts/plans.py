@@ -33,6 +33,7 @@ class Project:
     distinct: bool = False
     limit: int | None = None
     order_by: tuple[tuple[str, bool], ...] = ()  # (列名, 是否降序)
+    offset: int | None = None
 
 
 @dataclass(frozen=True)

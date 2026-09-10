@@ -72,6 +72,8 @@ def render_plan(plan: Plan) -> str:
             line += f" ORDER BY {terms}"
         if plan.limit is not None:
             line += f" LIMIT {plan.limit}"
+        if plan.offset is not None:
+            line += f" OFFSET {plan.offset}"
         return line + "\n" + _indent(render_plan(plan.source))
     if isinstance(plan, Delete):
         return f"Delete({plan.schema.name})\n" + _indent(render_plan(plan.source))
@@ -169,8 +171,10 @@ class PlanExecutor:
                 for name, descending in reversed(plan.order_by):
                     index = column_index[name]
                     projected.sort(key=lambda row, i=index: row[i], reverse=descending)
-            if plan.limit is not None:
-                projected = projected[:plan.limit]
+            if plan.limit is not None or plan.offset is not None:
+                start = plan.offset or 0
+                stop = start + plan.limit if plan.limit is not None else None
+                projected = projected[start:stop]
             return plan.columns, projected
         columns = _query_columns(plan)
         return columns, [record.row for record in self._scan_records(plan)]
