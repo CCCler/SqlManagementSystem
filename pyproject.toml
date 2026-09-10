@@ -14,6 +14,10 @@ dev = ["pytest>=8,<10"]
 
 [project.scripts]
 minisql = "minisql.cli.main:main"
+minisql-gui = "minisql.gui.server:main"
+
+[tool.setuptools.package-data]
+"minisql.gui" = ["static/*"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

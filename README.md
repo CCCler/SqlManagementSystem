@@ -8,6 +8,28 @@
 
 ## 开始使用
 
+### 图形工作台（GitHub 深色风格）
+
+在项目根目录双击 **`start_gui.cmd`**，即可启动本地服务并自动打开浏览器。
+默认数据库目录为 `data/gui`，可在界面右上角「管理连接」中切换。
+运行时仍只需要 Python 3.11+，无需 Node.js 或联网。
+
+工作台提供 SQL 高亮编辑、文件打开保存、选中执行、分页结果表、事务操作、
+Token/AST/执行计划分析及真实缓存统计。示例仅填入编辑器，点击运行才执行。
+
+```powershell
+# 也可从项目根目录启动；Ctrl+C 关闭服务
+.\.venv\Scripts\python.exe -m minisql.gui
+# 自定义数据库与端口
+.\.venv\Scripts\python.exe -m minisql.gui --data-dir .\data\practice --port 8767
+```
+
+详见 [图形工作台使用说明](docs/图形工作台.md)。本次 GUI 交付全套测试 **566 项通过**，浏览器操作验收通过。
+
+![MiniSQL 图形工作台](docs/assets/gui-workbench.png)
+
+### 环境安装
+
 首次安装时，在 Windows PowerShell 执行以下命令（需已安装 Python 3.11+）。已有 `.venv` 且已安装项目时可直接启动，无需重复创建环境：
 
 ```powershell
@@ -145,6 +167,8 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 待办包括报告复核、测试截图和答辩材料整理。
 
 ## 文档与负责人
+
+- [系统使用说明](docs/系统使用说明.md)：环境准备、图形界面、SQL 教程、命令行、事务与常见问题。
 
 - [引擎报告](docs/engine_report.md)：引擎设计与阶段性验收记录。
 - [架构设计](docs/架构设计.md)：模块划分、调用链与持久化边界。

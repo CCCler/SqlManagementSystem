@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="MiniSQL 本地数据库实验工作台：SQL 编辑、编译分析与页缓存统计。">
+  <title>MiniSQL · 数据库实验工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-16-2 20"/></symbol>
+  <symbol id="i-tree" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5H5v5m7-5h7v5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 3v18h17M9 16v-5m5 5V6m5 10v-8"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5C8 2 4 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-2-1-6-2-10 1Zm0 0v16"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8Z"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 9v12"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8A9 9 0 1 0 21 14M20 2v6h-6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 20h18V6H11L9 3H3Z"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+</svg>
+<header class="global-header">
+  <a class="brand" href="/" aria-label="MiniSQL 首页"><img src="/favicon.svg" width="32" height="32" alt=""><strong>MiniSQL</strong></a>
+  <span class="header-divider">/</span><span class="project-title">数据库实验工作台</span><span class="badge">Local</span>
+  <div class="header-right"><span id="connection-status" class="connection-status">正在连接…</span><button id="connection-button" class="button small">管理连接</button></div>
+</header>
+<section class="repo-header">
+  <div class="repo-title"><svg class="icon"><use href="#i-db"/></svg><span>workspace</span><span class="muted">/</span><strong id="database-name">gui</strong><span class="badge">本地数据库</span></div>
+  <div class="repo-subtitle">从 SQL 到数据页，观察每一步执行。</div>
+  <nav class="main-nav" aria-label="工作台导航">
+    <button class="nav-item active" data-view="workbench" aria-current="page"><svg class="icon"><use href="#i-code"/></svg>SQL 工作台</button>
+    <button class="nav-item" data-view="compiler"><svg class="icon"><use href="#i-tree"/></svg>编译分析<span id="trace-count" class="count">0</span></button>
+    <button class="nav-item" data-view="cache"><svg class="icon"><use href="#i-chart"/></svg>缓存统计</button>
+    <button class="nav-item" data-view="help"><svg class="icon"><use href="#i-book"/></svg>使用帮助</button>
+  </nav>
+</section>
+<div id="notice" class="notice" role="status" hidden></div>
+<div class="workspace">
+  <aside class="sidebar" aria-label="数据库结构">
+    <div class="sidebar-title"><strong>数据库结构 <span id="table-count" class="count">0</span></strong><button id="refresh-tables" class="icon-button" title="刷新表结构" aria-label="刷新表结构"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+    <label class="search-box"><span class="sr-only">筛选表</span><input id="table-search" placeholder="查找表…" autocomplete="off"><kbd>/</kbd></label>
+    <div id="table-list" class="table-list"></div>
+    <div class="sidebar-note"><svg class="icon"><use href="#i-db"/></svg><div><strong>自研页式存储</strong><p>4 KB / page · 本地持久化</p></div></div>
+  </aside>
+  <main>
+    <section id="view-workbench" class="view">
+      <div class="section-heading"><div><h1>SQL 工作台</h1><p>编写查询，探索你的数据。</p></div><span id="transaction-status" class="badge transaction">自动提交</span></div>
+      <div class="panel editor-panel">
+        <div class="panel-header"><span class="file-label"><svg class="icon"><use href="#i-code"/></svg><span id="file-name">query.sql</span></span><div class="actions"><button id="load-example" class="button small">加载示例</button><button id="open-file" class="icon-button" title="打开 SQL 文件" aria-label="打开 SQL 文件"><svg class="icon"><use href="#i-folder"/></svg></button><button id="save-file" class="icon-button" title="保存 SQL 文件" aria-label="保存 SQL 文件"><svg class="icon"><use href="#i-save"/></svg></button><input type="file" id="file-input" accept=".sql,.txt" hidden></div></div>
+        <div class="code-editor"><pre id="line-numbers" aria-hidden="true">1</pre><div class="editor-code"><pre id="highlight" aria-hidden="true"></pre><textarea id="sql-editor" aria-label="SQL 编辑器" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea></div></div>
+        <div class="editor-footer"><span id="cursor-position">行 1，列 1</span><span>UTF-8 <span class="footer-separator">·</span> MiniSQL</span></div>
+        <div class="run-toolbar"><div class="actions"><button id="run-all" class="button primary"><svg class="icon"><use href="#i-play"/></svg><span>运行全部</span></button><button id="run-selection" class="button">运行选中</button><span class="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span></div><div class="actions transaction-actions"><button id="begin" class="button small">开始事务</button><button id="commit" class="button small">提交</button><button id="rollback" class="button small">回滚</button></div></div>
+      </div>
+      <section class="panel results-panel" aria-label="执行结果"><div class="panel-header"><strong class="file-label"><svg class="icon"><use href="#i-table"/></svg>执行结果<span id="result-count" class="count">0</span></strong><span id="execution-meta" class="muted">尚未执行</span></div><div id="results"><div class="empty-state"><svg class="empty-icon"><use href="#i-code"/></svg><h2>准备好运行第一条 SQL</h2><p>输入语句或加载入门示例，点击「运行全部」。<br>查询结果、操作反馈和错误信息将显示在这里。</p><span class="empty-hint">CREATE → INSERT → SELECT → DELETE</span></div></div></section>
+      <p class="workspace-hint"><svg class="icon"><use href="#i-check"/></svg>操作由 MiniSQL 编译器与执行引擎完成，已提交的数据保存到本地。</p>
+    </section>
+    <section id="view-compiler" class="view" hidden>
+      <div class="section-heading"><div><h1>编译分析</h1><p>沿着 SQL → Token → AST → 语义检查 → 执行计划，理解查询。</p></div><span class="badge">真实编译输出</span></div>
+      <div class="panel"><div class="panel-header"><label for="statement-select">分析语句</label><select id="statement-select" aria-label="选择分析语句"></select></div><div id="compiler-content" class="analysis-body"></div></div>
+    </section>
+    <section id="view-cache" class="view" hidden>
+      <div class="section-heading"><div><h1>缓存统计</h1><p>观察页访问、缓存命中与脏页写回。</p></div><span class="badge">LRU · 64 页</span></div>
+      <div class="info-box">统计来自当前连接最近一次执行结束时的事务缓存。新事务会重建缓存；回滚后展示恢复后的缓存。它不是整批 SQL 的累计统计，也不是物理磁盘 I/O。</div>
+      <div id="cache-content"></div>
+    </section>
+    <section id="view-help" class="view" hidden>
+      <div class="section-heading"><div><h1>使用帮助</h1><p>一个可观察、可交互的数据库系统原型。</p></div><span class="badge">课程实验</span></div>
+      <article class="panel help-content">
+        <h2>01 · 连接你的数据库</h2><p>默认打开项目下的 <code>data/gui</code>。通过右上角「管理连接」输入其他本地目录；不存在的目录会被创建。每个页面拥有独立连接，修改目录前需提交或回滚事务。</p>
+        <h2>02 · 编写与运行 SQL</h2><p>点击「加载示例」可填入建表、插入和查询语句，示例不会自动运行。已有同名表时，再次建表会报错。SQL 以分号结尾，支持多条语句。Ctrl+Enter 运行选中内容，无选区时运行全部；Tab 插入两个空格。</p>
+        <p>支持 <code>CREATE TABLE</code>、<code>INSERT</code>、<code>SELECT</code>、<code>DELETE</code>、<code>DROP TABLE</code>、<code>EXPLAIN SELECT</code> 和事务语句。查询支持 <code>WHERE</code>、<code>DISTINCT</code>、<code>LIMIT</code>；字段类型为 <code>INT</code>、<code>VARCHAR</code>，布尔常量可用于表达式。INSERT 必须列出全部列名。暂不支持 UPDATE、JOIN、ORDER BY。</p>
+        <h2>03 · 理解事务与错误</h2><p>默认每条 SQL 自动提交。批次遇错停止后续执行，之前自动提交的语句仍可能已生效；失败批次不返回部分结果，可重新查询核实。显式事务发生错误后必须回滚，不能继续提交。</p>
+        <p>断开连接、关闭页面或关闭服务会尝试回滚未提交事务。页面异常离开时，最长 30 分钟空闲后释放连接；没有提交的事务不要长时间搁置。多个页面访问同一数据库时，未结束的事务可能使其他页面遇到锁超时。</p>
+        <h2>04 · 观察编译与缓存</h2><p>运行 SQL 后可切换到「编译分析」查看成功编译的语句。编译成功不代表执行或提交成功；失败阶段以执行结果中的错误为准。「缓存统计」显示引擎真实页缓存快照，目录刷新不替换最近执行的展示数据。</p>
+        <h2>05 · 文件与显示</h2><p>SQL 文件使用 UTF-8 编码，单次请求最多 256 KB。结果每页显示 50 行，显示分页不会重新查询。保存按钮将编辑器内容下载为 SQL 文件。工作台仅在本机运行，无需联网。</p>
+      </article>
+    </section>
+  </main>
+</div>
+<footer class="statusbar"><span class="status-brand"><svg class="icon"><use href="#i-db"/></svg>MiniSQL <span class="muted">/</span> 实验工作台</span><span id="directory-status" title="数据库目录">等待连接</span><span>SQL → Pages → Disk</span></footer>
+<dialog id="connection-dialog"><form id="connection-form"><div class="dialog-header"><h2>管理数据库连接</h2><button type="button" id="close-dialog" class="icon-button" aria-label="关闭连接窗口">×</button></div><p class="muted">连接本机上的 MiniSQL 数据库目录。</p><label for="directory-input">数据库目录</label><input id="directory-input" required autocomplete="off"><p class="field-hint">相对路径以服务启动目录为基准。新目录会自动创建。</p><p id="dialog-error" class="error-text" role="alert"></p><div class="dialog-actions"><button type="button" id="disconnect" class="button danger">断开连接</button><button type="submit" id="connect" class="button primary">连接数据库</button></div></form></dialog>
+</body>
+</html>
