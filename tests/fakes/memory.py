@@ -91,6 +91,26 @@ class MemoryStorage:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
         del self.records[table_id][record_id]
 
+    def rewrite_table(self, schema: TableSchema, new_schema: TableSchema,
+                      transform) -> TableSchema:
+        table_id = self._table_id(schema)
+        if new_schema.table_id != table_id:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "重写目标表编号必须与源表一致")
+        if not new_schema.columns:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "重写目标结构不能没有列")
+        rewritten: dict[RecordId, Row] = {}
+        for record_id, row in self.records[table_id].items():
+            new_row = transform(row)
+            if new_row is None:
+                continue
+            if len(new_row) != len(new_schema.columns):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "列数不匹配")
+            rewritten[record_id] = new_row
+        self.records[table_id] = rewritten
+        assigned = replace(new_schema, table_id=table_id)
+        self.tables[table_id] = assigned
+        return assigned
+
     def flush(self) -> None:
         pass  # 测试替身无持久化
 
