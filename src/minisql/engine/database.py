@@ -11,6 +11,7 @@ from minisql.contracts.interfaces import CatalogWriter, Compiler, Executor, Reco
 from minisql.contracts.models import ExecutionResult
 from minisql.engine.catalog import PersistentCatalog
 from minisql.engine.executor import PlanExecutor
+from minisql.engine.objects import PersistentAccountStore, PersistentObjectCatalog
 from minisql.storage.buffer import PageBufferPool
 from minisql.storage.file_manager import FileManager
 from minisql.storage.page import DiskPageManager
@@ -84,6 +85,10 @@ class TransactionalDatabase(Database):
         self.catalog = PersistentCatalog(self.storage)
         self.executor = PlanExecutor(self.storage, self.catalog)
         self.catalog.bootstrap()
+        self.objects = PersistentObjectCatalog(self.storage, self.catalog)
+        self.accounts = PersistentAccountStore(self.storage, self.catalog)
+        self.objects.bootstrap()
+        self.accounts.bootstrap()
 
     def _close_file(self):
         if self._files is not None:

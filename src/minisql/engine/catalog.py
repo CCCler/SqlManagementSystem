@@ -75,11 +75,22 @@ class PersistentCatalog:
         }
 
     def get_table(self, name: str) -> TableSchema | None:
+        """公开查找：不暴露 "__" 前缀的系统表（编译器与 SQL 不可见）。"""
+        key = name.lower()
+        if key.startswith("__"):
+            return None
+        return self.tables.get(key)
+
+    def _resolve_internal(self, name: str) -> TableSchema | None:
+        """内部查找：含对象系统表（PersistentObjectCatalog/账户存储使用）。"""
         return self.tables.get(name.lower())
 
     def list_tables(self) -> tuple[TableSchema, ...]:
         """只返回用户表，不暴露系统表。"""
-        return tuple(schema for schema in self.tables.values() if schema.table_id != 0)
+        return tuple(
+            schema for schema in self.tables.values()
+            if schema.table_id != 0 and not schema.name.startswith("__")
+        )
 
     def register_table(self, schema: TableSchema) -> None:
         """注册已分配 table_id 的表结构；重复表名报错。"""

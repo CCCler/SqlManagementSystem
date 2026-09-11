@@ -94,6 +94,9 @@ DECIMAL→字符串），对应测试见 `tests/integration/test_display.py`。
 
 1. `ViewDefinition/TriggerDefinition/IndexDefinition` 移入 `contracts/models.py`；
 2. `ObjectCatalog/DependencyTracker/AuthProvider` Protocol 移入 `contracts/interfaces.py`；
-3. `engine/` 实现持久化版本（按 `__views/__triggers/__indexes/__users/__grants/
-   __dependencies` 系统表），契约测试与内存替身同时适配；
+3. ~~`engine/` 实现持久化版本~~ **已落地**：`minisql/engine/objects.py` 提供
+   `PersistentObjectCatalog`（视图/触发器/索引/依赖）与 `PersistentAccountStore`
+   （账户/授权），六张系统表动态编号并登记进 `__catalog`；数据库生命周期
+   （`TransactionalDatabase._reload`）自动 bootstrap，`database.objects` /
+   `database.accounts` 直接可用，契约测试对内存替身与持久化实现并行验证；
 4. 更新 `docs/接口约定.md` 与 `docs/SQL扩展契约提案-成员三.md` 的对应条目。

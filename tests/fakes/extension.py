@@ -1,46 +1,15 @@
-"""SQL 扩展阶段牵头契约的接口示例与内存替身。
+"""SQL 扩展阶段牵头契约的内存替身。
 
 实现 docs/SQL扩展接口示例-成员三.md 提议的 ObjectCatalog / DependencyTracker
-语义；契约评审通过后，正式类型移入 contracts/、真实实现落 engine/，
-本替身继续作为隔离测试夹具。"""
-from dataclasses import dataclass
-
+语义；正式类型与持久化实现已落在 minisql.engine.objects（本文件再导出，
+保持既有导入路径），本替身继续作为隔离测试夹具，与持久化实现并行跑
+同一套契约测试。"""
 from minisql.contracts.errors import ErrorStage, MiniSQLError
-from minisql.contracts.models import ColumnSchema
+from minisql.engine.objects import IndexDefinition, TriggerDefinition, ViewDefinition
 
 
 def _error(stage: ErrorStage, code: str, reason: str) -> MiniSQLError:
     return MiniSQLError(stage, code, reason)
-
-
-@dataclass(frozen=True)
-class ViewDefinition:
-    """视图定义：规范化 SQL 文本 + 编译后的输出列清单。"""
-
-    name: str
-    definition: str
-    columns: tuple[ColumnSchema, ...]
-
-
-@dataclass(frozen=True)
-class TriggerDefinition:
-    """触发器定义：AFTER 行级，同一事件多个触发器按 created_order 升序执行。"""
-
-    name: str
-    table: str
-    event: str  # INSERT / UPDATE / DELETE
-    action: str
-    created_order: int = 0
-
-
-@dataclass(frozen=True)
-class IndexDefinition:
-    """索引定义：单列或联合列，唯一索引另设 unique 标志。"""
-
-    name: str
-    table: str
-    columns: tuple[str, ...]
-    unique: bool = False
 
 
 class MemoryObjectCatalog:

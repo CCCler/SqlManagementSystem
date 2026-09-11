@@ -14,7 +14,7 @@ Schema/Catalog、依赖、会话与结果四类契约的提案，以及五类"�
 | 系统表 | 建议编号 | 列（固定结构） |
 |---|---|---|
 | `__views` | 1 | view_id INT, view_name VARCHAR, definition VARCHAR, column_index INT, column_name VARCHAR, column_type VARCHAR |
-| `__triggers` | 2 | trigger_id INT, trigger_name VARCHAR, table_name VARCHAR, event VARCHAR, timing VARCHAR, action VARCHAR, created_at VARCHAR |
+| `__triggers` | 2 | trigger_id INT, trigger_name VARCHAR, table_name VARCHAR, event VARCHAR, action VARCHAR, created_order INT |
 | `__indexes` | 3 | index_id INT, index_name VARCHAR, table_name VARCHAR, unique_flag INT, column_index INT, column_name VARCHAR |
 | `__users` | 4 | user_id INT, account_id VARCHAR, user_name VARCHAR, salt VARCHAR, key VARCHAR, iterations INT, is_admin INT |
 | `__grants` | 5 | user_name VARCHAR, object_type VARCHAR, object_name VARCHAR, permission VARCHAR |
@@ -84,8 +84,9 @@ Schema/Catalog、依赖、会话与结果四类契约的提案，以及五类"�
 
 ## 五、未决项（评审时请成员一/二补充意见）
 
-1. 系统表编号：固定保留段（方案 A）还是动态分配（方案 B）；旧库用户表编号重映射
-   与成员二迁移方案的关系需要联合确认。
+1. ~~系统表编号：固定保留段（方案 A）还是动态分配（方案 B）~~ **已定案：方案 B**
+   （真实存储拒绝固定非零 table_id；动态分配对旧库天然无冲突，系统表首次创建时
+   登记进 `__catalog`，重开按名字解析编号——已随 engine/objects.py 落地）。
 2. UPDATE 已在当前基线实现，支持多列旧值赋值、WHERE、事务及 EXPLAIN UPDATE；后续需在既有路径接入新增约束、索引维护与触发器，不再作为待引入语法。
 3. 新类型的显示格式细节（DECIMAL 精度、时区行为）依赖成员二的类型编码定稿。
 4. 触发器动作中的 SELECT 结果如何处理（丢弃？报错？）。
