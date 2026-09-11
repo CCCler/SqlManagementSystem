@@ -34,6 +34,7 @@ class Database:
         results: list[ExecutionResult] = []
         for statement in self.compiler.split_statements(sql):
             compiled = self.compiler.compile(statement, self.catalog_view)
+            self.executor.statement_text = statement
             results.append(self.executor.execute(compiled.optimized_plan))
             self.storage.flush()
         return results
@@ -93,6 +94,8 @@ class TransactionalDatabase(Database):
         self.objects.bootstrap()
         self.accounts.bootstrap()
         self.catalog_view = ExtendedCatalogAdapter(self.catalog, self.objects, self.accounts)
+        self.executor.objects = self.objects
+        self.executor.accounts = self.accounts
 
     def _close_file(self):
         if self._files is not None:
@@ -184,6 +187,7 @@ class TransactionalDatabase(Database):
             self._start()
         try:
             compiled = self.compiler.compile(statement, self.catalog_view)
+            self.executor.statement_text = statement
             result = self.executor.execute(compiled.optimized_plan)
             if automatic:
                 self._commit_locked()

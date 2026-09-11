@@ -8,17 +8,14 @@ from minisql.contracts.errors import MiniSQLError
 from tests.fakes.memory import ExtendedMemoryCatalog
 
 @pytest.mark.parametrize('sql',[
- 'CREATE TABLE extra(id INT PRIMARY KEY);',
- 'CREATE TABLE extra(d DECIMAL);',
- 'CREATE TABLE extra(b BOOL);',
- 'UPDATE t SET id=id*2;',
- 'DELETE FROM t WHERE id IN (1,2);',
- 'CREATE INDEX by_id ON t(id);',
+ 'CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO u(id) VALUES (NEW.id);',
+ 'CREATE TRIGGER tr2 AFTER DELETE ON t FOR EACH ROW INSERT INTO u(id) VALUES (OLD.id);',
 ])
 def test_guard_no_business_change(tmp_path,sql):
     db=open_database(tmp_path)
     try:
         db.execute('CREATE TABLE t(id INT); INSERT INTO t(id) VALUES (1);')
+        db.execute('CREATE TABLE u(id INT);')
         before=(tmp_path/'minisql.db').read_bytes()
         with pytest.raises(MiniSQLError,match='FEATURE_NOT_EXECUTABLE'): db.execute(sql)
         assert (tmp_path/'minisql.db').read_bytes()==before
@@ -30,12 +27,14 @@ def test_guard_no_business_change(tmp_path,sql):
 
 def test_failed_batch_and_transaction(tmp_path):
     db=open_database(tmp_path)
+    gated='CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW INSERT INTO u(id) VALUES (NEW.id);'
     try:
         with pytest.raises(MiniSQLError):
-            db.execute('CREATE TABLE t(id INT); INSERT INTO t(id) VALUES(1); UPDATE t SET id=id*2; INSERT INTO t(id) VALUES(2);')
+            db.execute('CREATE TABLE t(id INT); INSERT INTO t(id) VALUES(1);'
+                       ' CREATE TABLE u(id INT); '+gated+' INSERT INTO t(id) VALUES(2);')
         assert db.execute('SELECT * FROM t;')[0].rows==((1,),)
         db.execute('BEGIN; INSERT INTO t(id) VALUES(3);')
-        with pytest.raises(MiniSQLError,match='FEATURE_NOT_EXECUTABLE'): db.execute('CREATE VIEW v AS SELECT id FROM t;')
+        with pytest.raises(MiniSQLError,match='FEATURE_NOT_EXECUTABLE'): db.execute(gated)
         with pytest.raises(MiniSQLError,match='TRANSACTION_ABORTED'): db.execute('COMMIT;')
         db.execute('ROLLBACK;')
         assert db.execute('SELECT * FROM t;')[0].rows==((1,),)

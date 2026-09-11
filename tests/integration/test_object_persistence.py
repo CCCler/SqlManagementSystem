@@ -12,6 +12,17 @@ from minisql.engine.objects import (
 )
 
 
+def _serialized_check() -> str:
+    """构造 name <> '' 的序列化 CHECK 表达式（列序号 1）。"""
+    from minisql.contracts.extensions import Expr, FieldBinding, TypeSpec
+    from minisql.contracts.models import SourcePosition
+    from minisql.engine.expr import serialize_expr
+    binding = FieldBinding(0, 0, 1, "", "name", TypeSpec("VARCHAR"))
+    return serialize_expr(Expr("<>", (
+        Expr("column", (None, "name"), SourcePosition(1, 1), None, binding),
+        Expr("literal", ("",), SourcePosition(1, 1)))))
+
+
 def test_object_tables_roundtrip_real_storage(tmp_path):
     path = tmp_path / "db"
     database = open_database(path)
@@ -23,7 +34,7 @@ def test_object_tables_roundtrip_real_storage(tmp_path):
     database.objects.register_index(IndexDefinition("i1", "t", ("id",), unique=True, root_page=5))
     database.objects.register_constraint(ConstraintDefinition("t", "pk_t", "PRIMARY KEY", ("id",)))
     database.objects.register_constraint(ConstraintDefinition(
-        "t", "ck_t", "CHECK", ("name",), expression="name <> ''"))
+        "t", "ck_t", "CHECK", ("name",), expression=_serialized_check()))
     database.objects.add_dependency("view", "v1", "table", "t")
     database.accounts.create_account("root", "pw", is_admin=True, iterations=1000)
     database.accounts.grant("root", "SELECT", "table", "t")
@@ -39,7 +50,7 @@ def test_object_tables_roundtrip_real_storage(tmp_path):
         constraints = reopened.objects.get_constraints("t")
         assert tuple((c.name, c.kind, c.columns) for c in constraints) == (
             ("ck_t", "CHECK", ("name",)), ("pk_t", "PRIMARY KEY", ("id",)))
-        assert constraints[0].expression == "name <> ''"
+        assert constraints[0].expression == _serialized_check()
         with pytest.raises(MiniSQLError) as error:
             reopened.objects.assert_droppable("table", "t")
         assert error.value.code == "DEPENDENT_OBJECT"

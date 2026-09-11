@@ -14,11 +14,32 @@ from minisql.contracts.plans import (
 from minisql.engine.expr import (
     Row as RuntimeRow, RowContext, aggregate_value, boolean_values, evaluate, expr_key,
 )
+from minisql.engine.write_path import WritePathMixin
+
+# 扩展 DML/DDL 算子 → 写路径处理器（阶段 C/D/E）。
+_EXTENDED_WRITE_HANDLERS = {
+    "Insert": "_extended_insert",
+    "Update": "_extended_update",
+    "Delete": "_extended_delete",
+    "CreateTable": "_extended_create_table",
+    "AlterTable": "_extended_alter_table",
+    "CreateIndex": "_extended_create_index",
+    "CreateView": "_extended_create_view",
+    "DropView": "_extended_drop_object",
+    "DropIndex": "_extended_drop_object",
+    "DropTrigger": "_extended_drop_object",
+    "CreateUser": "_extended_user_command",
+    "DropUser": "_extended_user_command",
+    "AlterUser": "_extended_user_command",
+    "Grant": "_extended_authorization",
+    "Revoke": "_extended_authorization",
+}
 
 # 阶段 A/B 已接入执行器的扩展查询算子；其余算子报 FEATURE_NOT_EXECUTABLE。
 EXTENDED_QUERY_OPERATORS = (
     "TableScan", "Filter", "ExpressionProject", "Sort", "Limit", "Distinct",
     "Aggregate", "Having", "Join", "SetOperation", "DerivedTable", "ViewScan",
+    "IndexScan",
 )
 
 INT_MIN = -(2 ** 63)
@@ -109,12 +130,12 @@ def _dedupe(values: list) -> list:
 
 
 def _source_nodes(plan) -> list:
-    """按左到右深度优先列出来源节点（TableScan/DerivedTable/ViewScan）。
+    """按左到右深度优先列出来源节点（TableScan/IndexScan/DerivedTable/ViewScan）。
 
     DerivedTable/ViewScan 视作本查询块的来源叶子，其内部是独立查询块，
     执行时另外分配绑定键。"""
     from minisql.contracts.extensions import ExtendedPlan
-    if plan.operator in ("TableScan", "DerivedTable", "ViewScan"):
+    if plan.operator in ("TableScan", "IndexScan", "DerivedTable", "ViewScan"):
         return [plan]
     nodes = []
     for child in plan.children:
@@ -212,10 +233,14 @@ def render_plan(plan: Plan) -> str:
     return str(plan)
 
 
-class PlanExecutor:
+class PlanExecutor(WritePathMixin):
     def __init__(self, storage: RecordStorage, catalog: CatalogWriter) -> None:
         self.storage = storage
         self.catalog = catalog
+        # 由 Database 注入的可选依赖：对象目录、账户存储与当前语句文本。
+        self.objects = None
+        self.accounts = None
+        self.statement_text = ""
 
     def execute(self, plan: Plan) -> ExecutionResult:
         from minisql.contracts.extensions import ExtendedPlan
@@ -244,9 +269,12 @@ class PlanExecutor:
     # ---------- 扩展计划执行（阶段 A：单表查询算子） ----------
 
     def _execute_extended(self, plan) -> ExecutionResult:
-        """执行扩展查询计划；未接入的算子保持 FEATURE_NOT_EXECUTABLE 屏障。"""
+        """执行扩展计划；未接入的算子保持 FEATURE_NOT_EXECUTABLE 屏障。"""
         if plan.operator == "Explain":
             return ExecutionResult(message=render_plan(plan.children[0]))
+        handler = _EXTENDED_WRITE_HANDLERS.get(plan.operator)
+        if handler is not None:
+            return getattr(self, handler)(plan)
         if plan.operator not in EXTENDED_QUERY_OPERATORS:
             raise _execution_error("FEATURE_NOT_EXECUTABLE",
                                    f"扩展算子 {plan.operator} 的执行尚未接入")
@@ -269,7 +297,7 @@ class PlanExecutor:
         used: set = set()
         for source in _source_nodes(plan):
             attributes = dict(source.attributes)
-            if source.operator == "TableScan":
+            if source.operator in ("TableScan", "IndexScan"):
                 table_name = attributes["table"]
                 alias = (attributes.get("alias") or table_name).lower()
                 schema = self.catalog.get_table(table_name)
@@ -311,6 +339,8 @@ class PlanExecutor:
                 for record in self.storage.scan(schema)
             ]
             return rows, plan.output, []
+        if operator == "IndexScan":
+            return self._index_scan_rows(plan, cursor)
         if operator == "Join":
             return self._join_rows(plan, outer, cursor)
         if operator in ("DerivedTable", "ViewScan"):
@@ -363,6 +393,46 @@ class PlanExecutor:
                 seen.add(row.output)
                 unique.append(row)
         return unique, output, output_keys
+
+    def _index_scan_rows(self, plan, cursor):
+        """索引扫描：按 bounds 求 lo/hi 后 range_scan 取候选 rid，再回表取行。
+
+        索引计划保留完整 Filter 做残余检查，因此这里只需返回候选超集。"""
+        attributes = dict(plan.attributes)
+        schema = self._table_schema_for_scan(attributes["table"])
+        values_key, _ = cursor.take()
+        index_def = self.objects.get_index(attributes["index"]) if self.objects else None
+        if index_def is None or index_def.root_page is None:
+            raise _execution_error("FEATURE_NOT_EXECUTABLE", f"索引 {attributes.get('index')} 不可用")
+        index = self._index_tree(schema, index_def)
+        lo: list = []
+        hi: list = []
+        lo_inclusive = hi_inclusive = True
+        for _, operator, literal_expr in attributes.get("bounds") or ():
+            value = evaluate(literal_expr, RowContext(RuntimeRow()))
+            if operator == "=":
+                lo.append(value)
+                hi.append(value)
+            elif operator in (">", ">="):
+                lo.append(value)
+                lo_inclusive = operator == ">="
+                break
+            else:
+                hi.append(value)
+                hi_inclusive = operator == "<="
+                break
+        record_ids = index.range_scan(tuple(lo) or None, tuple(hi) or None,
+                                      lo_inclusive, hi_inclusive)
+        by_id = {record.record_id: tuple(record.row) for record in self.storage.scan(schema)}
+        rows = [RuntimeRow({values_key: by_id[rid]} if values_key else {})
+                for rid in record_ids if rid in by_id]
+        return rows, plan.output, []
+
+    def _table_schema_for_scan(self, name):
+        schema = self.catalog.get_table(name)
+        if schema is None:
+            raise _execution_error("UNKNOWN_TABLE", name)
+        return schema
 
     def _join_rows(self, plan, outer, cursor):
         """四类连接：INNER/CROSS 笛卡尔积过滤；LEFT/RIGHT 缺失侧补 NULL。"""

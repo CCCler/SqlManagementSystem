@@ -13,6 +13,7 @@ from datetime import date, datetime, time
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
+from minisql.contracts.models import SourcePosition
 
 INT_MIN, INT_MAX = -(2 ** 63), 2 ** 63 - 1
 _WORKING_PRECISION = 60
@@ -279,6 +280,80 @@ def _like(args):
         return None
     escape = args[2] if len(args) == 3 else None
     return re.fullmatch(_like_regex(pattern, escape), value, re.DOTALL) is not None
+
+
+def serialize_expr(expr) -> str:
+    """把约束/默认值表达式序列化为 JSON 文本（仅结构 + 列序号 + 字面量）。
+
+    字段引用只保留 ordinal（即表内列序号），检查时重建为 (0, 0) 来源的绑定；
+    DECIMAL/日期时间字面量带类型标记，反序列化后还原为精确值。"""
+    import json
+
+    def encode(node):
+        if node.op == "literal":
+            return {"op": "literal", "value": _encode_value(node.args[0])}
+        if node.op == "column":
+            binding = node.binding
+            return {"op": "column", "ordinal": binding.ordinal if binding else None,
+                    "name": binding.name if binding else node.args[-1]}
+        from minisql.contracts.extensions import Expr
+        return {"op": node.op,
+                "args": [encode(arg) if isinstance(arg, Expr) else _encode_value(arg)
+                         for arg in node.args]}
+
+    return json.dumps(encode(expr), ensure_ascii=False)
+
+
+def _encode_value(value):
+    if isinstance(value, Decimal):
+        return {"__decimal__": str(value)}
+    if isinstance(value, datetime):
+        return {"__datetime__": value.isoformat()}
+    if isinstance(value, date):
+        return {"__date__": value.isoformat()}
+    if isinstance(value, time):
+        return {"__time__": value.isoformat()}
+    return value
+
+
+def _decode_value(value):
+    if isinstance(value, dict):
+        if "__decimal__" in value:
+            return Decimal(value["__decimal__"])
+        if "__datetime__" in value:
+            return datetime.fromisoformat(value["__datetime__"])
+        if "__date__" in value:
+            return date.fromisoformat(value["__date__"])
+        if "__time__" in value:
+            return time.fromisoformat(value["__time__"])
+    return value
+
+
+def deserialize_expr(text: str, columns: tuple = ()):
+    """还原 serialize_expr 的结果；columns 为表列名（校验 ordinal 与名称一致）。"""
+    import json
+    from minisql.contracts.extensions import Expr, FieldBinding, TypeSpec
+
+    def decode(node):
+        op = node["op"]
+        if op == "literal":
+            return Expr("literal", (_decode_value(node["value"]),), SourcePosition(1, 1))
+        if op == "column":
+            ordinal = node["ordinal"]
+            if ordinal is None or ordinal >= len(columns) or columns[ordinal] != node["name"]:
+                raise _error("INVALID_CONSTRAINT", f"约束引用了未知列：{node['name']}")
+            binding = FieldBinding(0, 0, ordinal, "", node["name"], TypeSpec("NULL"))
+            return Expr("column", (None, node["name"]), SourcePosition(1, 1), None, binding)
+        args = tuple(decode(arg) if isinstance(arg, dict) and "op" in arg else _decode_value(arg)
+                     for arg in node["args"])
+        return Expr(op, args, SourcePosition(1, 1))
+
+    try:
+        return decode(json.loads(text))
+    except MiniSQLError:
+        raise
+    except Exception as error:
+        raise _error("INVALID_CONSTRAINT", f"约束表达式无法还原：{error}") from error
 
 
 def _sub_context(row, outer):

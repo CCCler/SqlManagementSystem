@@ -7,7 +7,7 @@
 
 对象读写 API 的语义与 tests/fakes/extension.py 的内存替身一致（见
 docs/SQL扩展接口示例-成员三.md），契约测试对双实现并行验证。"""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import RecordStorage
@@ -309,6 +309,25 @@ class PersistentObjectCatalog:
         key = table.lower()
         return tuple(index for index in self._indexes.values() if index.table == key)
 
+    def set_index_root(self, name: str, root_page: int) -> None:
+        """索引根页变化（分裂长高）后回写持久化元数据。"""
+        key = name.lower()
+        index = self._indexes.get(key)
+        if index is None:
+            raise _error("UNKNOWN_OBJECT", f"索引 {name} 不存在")
+        if index.root_page == root_page:
+            return
+        table = self._table(INDEXES)
+        records = [record for record in self.storage.scan(table) if record.row[1] == key]
+        for record in records:
+            row = list(record.row)
+            row[6] = root_page
+            self.storage.delete(table, record.record_id)
+            self.storage.insert(table, tuple(row))
+        self.storage.flush()
+        self._indexes[key] = IndexDefinition(
+            index.name, index.table, index.columns, index.unique, root_page)
+
     def unregister_index(self, name: str) -> None:
         key = name.lower()
         if key not in self._indexes:
@@ -346,6 +365,11 @@ class PersistentObjectCatalog:
         """指定表的全部约束，按约束名排序。"""
         key = table.lower()
         return tuple(sorted(self._constraints.get(key, {}).values(), key=lambda item: item.name))
+
+    def all_constraints(self) -> tuple[ConstraintDefinition, ...]:
+        """全部表的约束（外键父侧保护等跨表检查使用）。"""
+        return tuple(constraint for table in self._constraints.values()
+                     for constraint in table.values())
 
     def unregister_constraints(self, table: str, name: str | None = None) -> None:
         """移除指定表的全部约束，或仅移除具名约束。"""
@@ -414,12 +438,46 @@ class ExtendedCatalogAdapter:
         self.objects = objects
         self.accounts = accounts
 
-    # ---- 表（转发持久化目录） ----
+    # ---- 表（持久化目录 + 约束/可空/默认值补全） ----
+    def _enrich(self, schema):
+        """把 __constraints 中的 NOT NULL/DEFAULT/约束补回编译器可见的表结构。"""
+        from minisql.contracts.extensions import Constraint as CompilerConstraint
+        from minisql.engine.expr import deserialize_expr
+        if schema is None:
+            return None
+        constraints = self.objects.get_constraints(schema.name)
+        column_names = tuple(column.name for column in schema.columns)
+        columns = []
+        for column in schema.columns:
+            nullable = not any(
+                constraint.kind == "NOT NULL" and column.name in constraint.columns
+                for constraint in constraints)
+            default_constraint = next(
+                (constraint for constraint in constraints
+                 if constraint.kind == "DEFAULT" and column.name in constraint.columns), None)
+            if default_constraint is not None:
+                columns.append(replace(
+                    column, nullable=nullable, has_default=True,
+                    default=deserialize_expr(default_constraint.default_text, column_names)))
+            else:
+                columns.append(replace(column, nullable=nullable))
+        compiled = []
+        for constraint in constraints:
+            if constraint.kind in ("NOT NULL", "DEFAULT"):
+                continue  # 已并入列属性
+            expression = (deserialize_expr(constraint.expression, column_names)
+                          if constraint.expression else None)
+            compiled.append(CompilerConstraint(
+                kind=constraint.kind, columns=constraint.columns, name=constraint.name,
+                reference_table=constraint.reference_table or None,
+                reference_columns=constraint.reference_columns, expression=expression))
+        return replace(schema, columns=tuple(columns), constraints=tuple(compiled))
+
     def get_table(self, name: str):
-        return self.catalog.get_table(name)
+        return self._enrich(self.catalog.get_table(name))
 
     def list_tables(self):
-        return self.catalog.list_tables()
+        return tuple(self._enrich(schema) for schema in self.catalog.list_tables())
 
     # ---- 视图 ----
     def get_view(self, name: str):
@@ -464,10 +522,11 @@ class ExtendedCatalogAdapter:
 
     # ---- 依赖 ----
     def get_dependencies(self, kind: str, name: str):
+        """编译器语义：返回依赖该对象的对象（dependents），用于保守拒绝 ALTER/DROP。"""
         from minisql.contracts.extensions import ObjectDependency
         return tuple(ObjectDependency(kind=dependency_kind, name=dependency_name)
                      for dependency_kind, dependency_name
-                     in self.objects.dependencies(kind, name))
+                     in self.objects.dependents(kind, name))
 
 
 class PersistentAccountStore(AccountStore):
