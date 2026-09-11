@@ -25,6 +25,7 @@ _EXTENDED_WRITE_HANDLERS = {
     "AlterTable": "_extended_alter_table",
     "CreateIndex": "_extended_create_index",
     "CreateView": "_extended_create_view",
+    "CreateTrigger": "_extended_create_trigger",
     "DropView": "_extended_drop_object",
     "DropIndex": "_extended_drop_object",
     "DropTrigger": "_extended_drop_object",
@@ -237,13 +238,17 @@ class PlanExecutor(WritePathMixin):
     def __init__(self, storage: RecordStorage, catalog: CatalogWriter) -> None:
         self.storage = storage
         self.catalog = catalog
-        # 由 Database 注入的可选依赖：对象目录、账户存储与当前语句文本。
+        # 由 Database 注入的可选依赖：对象目录、账户存储、编译器与当前语句文本。
         self.objects = None
         self.accounts = None
+        self.compiler = None
+        self.catalog_view = None
+        self.session = None
         self.statement_text = ""
 
     def execute(self, plan: Plan) -> ExecutionResult:
         from minisql.contracts.extensions import ExtendedPlan
+        self._enforce_plan_permissions(plan)  # 统一入口鉴权（初始化模式跳过）
         if isinstance(plan, ExtendedPlan):
             return self._execute_extended(plan)
         if not isinstance(plan, Explain):
@@ -573,6 +578,7 @@ class PlanExecutor(WritePathMixin):
     def _insert(self, plan: Insert) -> ExecutionResult:
         self.storage.insert(plan.schema, plan.values)
         self.storage.flush()
+        self._fire_triggers(plan.schema, "INSERT", None, plan.values)
         return ExecutionResult(affected_rows=1, message="已插入 1 行")
 
     def _drop_table(self, plan: DropTable) -> ExecutionResult:
@@ -582,6 +588,9 @@ class PlanExecutor(WritePathMixin):
         current = self.catalog.get_table(plan.schema.name)
         if current is None or current.table_id != plan.schema.table_id:
             raise _execution_error("UNKNOWN_TABLE", plan.schema.name)
+        if self.objects is not None:
+            # 依赖保护：视图/触发器等对象引用该表时保守拒绝（首版不隐式级联）。
+            self.objects.assert_droppable("table", current.name)
         self.storage.drop_table(current)
         self.catalog.unregister_table(current.name)
         self.storage.flush()
@@ -600,24 +609,28 @@ class PlanExecutor(WritePathMixin):
             for name, expression in plan.assignments:
                 row[indexes[name]] = self._eval(expression, record.row, indexes)
             replacements.append((record.record_id, tuple(row)))
+        originals = {record.record_id: record.row for record in self._scan_records(plan.source)}
         for record_id, row in replacements:
             # 复用堆存储支持变长记录迁移；事务日志负责整条语句的失败恢复。
             # 先插入再删除，不改变尚未更新记录的槽编号。
             self.storage.insert(plan.schema, row)
             self.storage.delete(plan.schema, record_id)
         self.storage.flush()
+        for record_id, row in replacements:  # 行级事件在语句自身写入完成后派发
+            self._fire_triggers(plan.schema, "UPDATE", originals.get(record_id), row)
         count = len(replacements)
         return ExecutionResult(affected_rows=count, message=f"已更新 {count} 行")
 
     def _delete(self, plan: Delete) -> ExecutionResult:
         if not isinstance(plan.source, (SeqScan, Filter, EmptyScan)):
             raise _execution_error("UNKNOWN_PLAN", "DELETE 只允许 SeqScan/Filter/EmptyScan 源以保留 RecordId")
-        count = 0
-        for record in self._scan_records(plan.source):
+        doomed = self._scan_records(plan.source)
+        for record in doomed:
             self.storage.delete(plan.schema, record.record_id)
-            count += 1
         self.storage.flush()
-        return ExecutionResult(affected_rows=count, message=f"已删除 {count} 行")
+        for record in doomed:  # 行级事件在语句自身写入完成后派发
+            self._fire_triggers(plan.schema, "DELETE", record.row, None)
+        return ExecutionResult(affected_rows=len(doomed), message=f"已删除 {len(doomed)} 行")
 
     def _run_query(self, plan: QueryPlan) -> tuple[tuple[str, ...], list[Row]]:
         if isinstance(plan, EmptyScan):

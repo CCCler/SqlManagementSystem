@@ -18,6 +18,37 @@ def _write_error(code: str, reason: str) -> MiniSQLError:
     return MiniSQLError(ErrorStage.EXECUTION, code, reason)
 
 
+_OPERATOR_PERMISSIONS = {
+    "Insert": "INSERT",
+    "Update": "UPDATE",
+    "Delete": "DELETE",
+    "CreateTable": "CREATE TABLE",
+    "AlterTable": "ALTER",
+    "CreateIndex": "CREATE INDEX",
+    "CreateView": "CREATE VIEW",
+    "CreateTrigger": "CREATE TRIGGER",
+    "DropView": "DROP",
+    "DropIndex": "DROP",
+    "DropTrigger": "DROP",
+}
+
+
+class _ReloadCatalogView:
+    """触发器定义重载视图：隐藏正在重载的触发器，避免重复检查误报。"""
+
+    def __init__(self, view, hidden: str):
+        self._view = view
+        self._hidden = hidden
+
+    def __getattr__(self, name):
+        return getattr(self._view, name)
+
+    def get_trigger(self, name):
+        if name.lower() == self._hidden:
+            return None
+        return self._view.get_trigger(name)
+
+
 class WritePathMixin:
     """扩展写路径；宿主类需提供 storage、catalog、executor 侧注入的 objects/accounts。"""
 
@@ -26,6 +57,82 @@ class WritePathMixin:
     def _require_objects(self):
         if getattr(self, "objects", None) is None:
             raise _write_error("FEATURE_NOT_EXECUTABLE", "对象目录未接入，无法执行扩展 DDL")
+
+    # ---------- 统一鉴权（初始化模式：无账户时不强制） ----------
+
+    def _enforcing(self) -> bool:
+        return self.accounts is not None and bool(self.accounts.accounts)
+
+    def _require_permission(self, permission, object_kind=None, object_name=None):
+        if not self._enforcing():
+            return
+        self.accounts.require(getattr(self, "session", None), permission,
+                              object_kind, object_name)
+
+    def _enforce_plan_permissions(self, plan):
+        """统一入口检查：按计划收集所需的表级权限，覆盖查询/写入/DDL 与视图展开。"""
+        if not self._enforcing():
+            return
+        from minisql.contracts.extensions import ExtendedPlan
+        from minisql.contracts.plans import (
+            CreateTable as LegacyCreate, Delete as LegacyDelete, DropTable as LegacyDrop,
+            Explain as LegacyExplain, Filter, Insert as LegacyInsert, Project,
+            EmptyScan, QueryPlan, SeqScan, Update as LegacyUpdate,
+        )
+
+        permissions: dict[tuple[str, str], str] = {}
+
+        def need(permission, table):
+            permissions[(permission, table.lower())] = permission
+
+        def visit(node):
+            if isinstance(node, ExtendedPlan):
+                operator = node.operator
+                attributes = dict(node.attributes)
+                if operator in ("TableScan", "IndexScan"):
+                    need("SELECT", attributes.get("table", ""))
+                elif operator in _OPERATOR_PERMISSIONS:
+                    need(_OPERATOR_PERMISSIONS[operator], attributes.get("table", ""))
+                elif operator == "DropTable":
+                    need("DROP", attributes.get("table", ""))
+                for child in node.children:
+                    if isinstance(child, ExtendedPlan):
+                        visit(child)
+                for expression in node.expressions:
+                    for arg in expression.args:
+                        if isinstance(arg, ExtendedPlan):
+                            visit(arg)
+                return
+            if isinstance(node, SeqScan):
+                need("SELECT", node.schema.name)
+            elif isinstance(node, Filter):
+                visit(node.source)
+            elif isinstance(node, Project):
+                visit(node.source)
+            elif isinstance(node, EmptyScan):
+                return
+            elif isinstance(node, LegacyInsert):
+                need("INSERT", node.schema.name)
+            elif isinstance(node, LegacyUpdate):
+                need("UPDATE", node.schema.name)
+                visit(node.source)
+            elif isinstance(node, LegacyDelete):
+                need("DELETE", node.schema.name)
+                visit(node.source)
+            elif isinstance(node, LegacyCreate):
+                need("CREATE TABLE", node.schema.name)
+            elif isinstance(node, LegacyDrop):
+                need("DROP", node.schema.name)
+            elif isinstance(node, LegacyExplain):
+                visit(node.plan)
+
+        visit(plan)
+        for (permission, table) in permissions:
+            self.accounts.require(getattr(self, "session", None), permission, "table", table)
+
+    def enforce_write_permission(self, permission, table):
+        """行级写入与 DDL 处理器使用；表名统一小写。"""
+        self._require_permission(permission, "table", table)
 
     def _table_schema(self, name: str) -> TableSchema:
         schema = self.catalog.get_table(name)
@@ -203,11 +310,11 @@ class WritePathMixin:
 
     # ---------- DML ----------
 
-    def _extended_insert(self, plan):
+    def _extended_insert(self, plan, outer=None):
         attributes = dict(plan.attributes)
         schema = self._table_schema(attributes["table"])
         names = attributes.get("assignments") or ()
-        context = RowContext(RuntimeRow())
+        context = RowContext(RuntimeRow(), outer)  # 触发器动作经外层上下文取 NEW/OLD
         provided = {name: evaluate(expression, context)
                     for name, expression in zip(names, plan.expressions)}
         values = []
@@ -221,9 +328,10 @@ class WritePathMixin:
         record_id = self.storage.insert(schema, row)
         self._index_insert(schema, row, record_id)
         self.storage.flush()
+        self._fire_triggers(schema, "INSERT", None, row)
         return ExecutionResult(affected_rows=1, message="已插入 1 行")
 
-    def _extended_update(self, plan):
+    def _extended_update(self, plan, outer=None):
         attributes = dict(plan.attributes)
         schema = self._table_schema(attributes["table"])
         names = attributes.get("assignments") or ()
@@ -231,7 +339,7 @@ class WritePathMixin:
         predicate = plan.expressions[len(names)] if attributes.get("has_where") else None
         replacements = []
         for record in self.storage.scan(schema):
-            context = RowContext(RuntimeRow(self._row_dict(plan, record.row)))
+            context = RowContext(RuntimeRow(self._row_dict(plan, record.row)), outer)
             if predicate is not None and evaluate(predicate, context) is not True:
                 continue
             row = list(record.row)
@@ -246,9 +354,11 @@ class WritePathMixin:
             self.storage.delete(schema, old_record_id)
             self._index_update(schema, old_row, new_row, old_record_id, new_record_id)
         self.storage.flush()
+        for _, old_row, new_row in replacements:  # 行级事件在语句自身写入完成后派发
+            self._fire_triggers(schema, "UPDATE", old_row, new_row)
         return ExecutionResult(affected_rows=len(replacements), message=f"已更新 {len(replacements)} 行")
 
-    def _extended_delete(self, plan):
+    def _extended_delete(self, plan, outer=None):
         attributes = dict(plan.attributes)
         schema = self._table_schema(attributes["table"])
         predicate = plan.expressions[0] if attributes.get("has_where") else None
@@ -257,7 +367,7 @@ class WritePathMixin:
             if predicate is None:
                 doomed.append(record)
                 continue
-            context = RowContext(RuntimeRow(self._row_dict(plan, record.row)))
+            context = RowContext(RuntimeRow(self._row_dict(plan, record.row)), outer)
             if evaluate(predicate, context) is True:
                 doomed.append(record)
         for record in doomed:
@@ -265,7 +375,80 @@ class WritePathMixin:
             self.storage.delete(schema, record.record_id)
             self._index_delete(schema, record.row, record.record_id)
         self.storage.flush()
+        for record in doomed:  # 行级事件在语句自身写入完成后派发
+            self._fire_triggers(schema, "DELETE", record.row, None)
         return ExecutionResult(affected_rows=len(doomed), message=f"已删除 {len(doomed)} 行")
+
+    # ---------- 触发器 ----------
+
+    def _extended_create_trigger(self, plan):
+        from minisql.engine.objects import TriggerDefinition
+        self._require_objects()
+        attributes = dict(plan.attributes)
+        definition = (getattr(self, "statement_text", "") or "").strip()
+        if not definition.endswith(";"):
+            definition += ";"
+        self.objects.register_trigger(TriggerDefinition(
+            attributes["trigger"], attributes["table"], attributes["event"].upper(),
+            definition, "AFTER", datetime.now().isoformat(timespec="seconds")))
+        self.storage.flush()
+        return ExecutionResult(message=f"触发器 {attributes['trigger']} 已创建")
+
+    def _compiled_trigger_actions(self, trigger):
+        """重编译触发器定义取回动作计划（NEW/OLD 由编译器重新绑定）。"""
+        cache = getattr(self, "_trigger_cache", None)
+        if cache is None:
+            cache = self._trigger_cache = {}
+        if trigger.name not in cache:
+            if self.compiler is None or self.catalog_view is None:
+                raise _write_error("FEATURE_NOT_EXECUTABLE", "触发器动作缺少编译器，无法调度")
+            from minisql.contracts.extensions import ExtendedPlan
+            compiled = self.compiler.compile(
+                trigger.action, _ReloadCatalogView(self.catalog_view, trigger.name.lower()))
+            plans = [child for child in compiled.optimized_plan.children
+                     if isinstance(child, ExtendedPlan)]
+            cache[trigger.name] = plans
+        return cache[trigger.name]
+
+    def _fire_triggers(self, schema, event, old_row, new_row):
+        """派发 AFTER 行级触发器：按创建先后执行，动态递归经活动栈拒绝。"""
+        if self.objects is None:
+            return
+        from minisql.engine.executor import _collect_bindings
+        for trigger in self.objects.get_triggers(schema.name, event):
+            active = getattr(self, "_active_triggers", None)
+            if active is None:
+                active = self._active_triggers = set()
+            if trigger.name in active:
+                raise _write_error("RECURSIVE_TRIGGER", f"触发器动态递归被拒绝：{trigger.name}")
+            active.add(trigger.name)
+            try:
+                for action in self._compiled_trigger_actions(trigger):
+                    values = {}
+                    for key, binding in _collect_bindings(action).items():
+                        qualifier = (binding.qualifier or "").lower()
+                        if qualifier == "new" and new_row is not None:
+                            values[key] = tuple(new_row)
+                        elif qualifier == "old" and old_row is not None:
+                            values[key] = tuple(old_row)
+                    self._run_trigger_action(action, RowContext(RuntimeRow(values)))
+            finally:
+                active.discard(trigger.name)
+
+    def _run_trigger_action(self, action, context):
+        """执行一个触发器动作；SELECT 动作按约定丢弃结果。"""
+        operator = action.operator
+        if operator == "Insert":
+            self._extended_insert(action, context)
+        elif operator == "Update":
+            self._extended_update(action, context)
+        elif operator == "Delete":
+            self._extended_delete(action, context)
+        elif operator in ("ExpressionProject", "Filter", "TableScan", "Sort", "Limit", "Distinct"):
+            cursor = _ScanCursor(self._scan_assignments(action))
+            self._extended_node(action, context, cursor)  # 结果按 discard_select_results 丢弃
+        else:
+            raise _write_error("FEATURE_NOT_EXECUTABLE", f"触发器动作 {operator} 的执行尚未接入")
 
     # ---------- DDL ----------
 
@@ -306,9 +489,11 @@ class WritePathMixin:
 
         def transform(row):
             if action == "ADD COLUMN":
-                added = new_columns[-1]
                 column = new_schema.columns[-1]
-                value = self._default_value(new_schema, column)
+                if column.has_default and column.default is not None:
+                    value = evaluate(column.default, RowContext(RuntimeRow()))
+                else:
+                    value = None
                 return tuple(row) + (value,)
             if action == "DROP COLUMN":
                 dropped = next(name for name in old_columns if name not in new_columns)
@@ -318,9 +503,21 @@ class WritePathMixin:
             return tuple(row)
 
         old_index_defs = self._index_defs(old_schema)
+        added_columns = [column for column in new_schema.columns
+                         if column.name not in old_columns]
         assigned = self.storage.rewrite_table(old_schema, new_schema, transform)
         self.catalog.unregister_table(old_schema.name)
         self.catalog.register_table(assigned)
+        # 新增列的非空/默认值登记持久化（供后续写入与目录补全使用）
+        from minisql.engine.objects import ConstraintDefinition
+        for column in added_columns:
+            if not column.nullable:
+                self.objects.register_constraint(ConstraintDefinition(
+                    new_schema.name, f"__notnull_{column.name}", "NOT NULL", (column.name,)))
+            if column.has_default and column.default is not None:
+                self.objects.register_constraint(ConstraintDefinition(
+                    new_schema.name, f"__default_{column.name}", "DEFAULT", (column.name,),
+                    default_text=serialize_expr(column.default)))
         # 约束维护：被删除/重命名的列上的约束移除（保守，不自动改写 CHECK）
         for constraint in self.objects.get_constraints(old_schema.name):
             missing = [name for name in constraint.columns
@@ -415,16 +612,24 @@ class WritePathMixin:
         if operator == "CreateUser":
             if plan.password is None:
                 raise _write_error("INVALID_PASSWORD", "创建账户必须提供密码")
-            self.accounts.create_account(name, plan.password)
+            if self._enforcing():
+                # 已有账户时必须由管理员创建；首个账户视为初始化管理员。
+                self.accounts.require_admin(getattr(self, "session", None))
+                self.accounts.create_account(name, plan.password)
+            else:
+                self.accounts.create_account(name, plan.password, is_admin=True)
             return ExecutionResult(message=f"账户 {name} 已创建")
         if operator == "DropUser":
-            self.accounts.remove_account(None, name)
+            self.accounts.require_admin(getattr(self, "session", None))
+            self.accounts.remove_account(getattr(self, "session", None), name)
             return ExecutionResult(message=f"账户 {name} 已删除")
         raise _write_error("FEATURE_NOT_EXECUTABLE", f"{operator} 的执行尚未接入")
 
     def _extended_authorization(self, plan):
         if self.accounts is None:
             raise _write_error("FEATURE_NOT_EXECUTABLE", "账户存储未接入")
+        if self._enforcing():
+            self.accounts.require_admin(getattr(self, "session", None))
         attributes = dict(plan.attributes)
         user = attributes["user"]
         object_kind = attributes.get("object_kind") or "table"

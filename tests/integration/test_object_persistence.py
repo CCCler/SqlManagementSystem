@@ -57,6 +57,7 @@ def test_object_tables_roundtrip_real_storage(tmp_path):
         session = reopened.accounts.authenticate("root", "pw")
         assert session is not None
         reopened.accounts.require(session, "SELECT", "table", "t")
+        assert reopened.login("root", "pw")  # 已有账户：SQL 需登录后执行
         # 用户表与对象系统表共存，公开目录不暴露系统表
         assert [table.name for table in reopened.catalog.list_tables()] == ["t"]
         assert reopened.execute("SELECT * FROM t;")[0].rows == ()

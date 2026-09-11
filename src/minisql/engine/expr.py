@@ -329,21 +329,45 @@ def _decode_value(value):
     return value
 
 
-def deserialize_expr(text: str, columns: tuple = ()):
-    """还原 serialize_expr 的结果；columns 为表列名（校验 ordinal 与名称一致）。"""
+def _value_spec(value):
+    """字面量的编译期类型标注（编译器读取默认值/约束时要求 type 非空）。"""
+    from minisql.contracts.extensions import TypeSpec
+    if isinstance(value, bool):
+        return TypeSpec("BOOL", nullable=False)
+    if isinstance(value, int):
+        return TypeSpec("INT", nullable=False)
+    if isinstance(value, str):
+        return TypeSpec("VARCHAR", nullable=False)
+    if isinstance(value, Decimal):
+        sign, digits, exponent = value.as_tuple()
+        scale = max(0, -exponent)
+        return TypeSpec("DECIMAL", max(1, len(digits)), min(scale, 38), False)
+    if isinstance(value, datetime):
+        return TypeSpec("TIMESTAMP", nullable=False)
+    if isinstance(value, date):
+        return TypeSpec("DATE", nullable=False)
+    if isinstance(value, time):
+        return TypeSpec("TIME", nullable=False)
+    return TypeSpec("NULL")
+
+
+def deserialize_expr(text: str, columns: tuple = (), types: tuple = ()):
+    """还原 serialize_expr 的结果；columns 为列名，types 为对应的 TypeSpec（可省略）。"""
     import json
     from minisql.contracts.extensions import Expr, FieldBinding, TypeSpec
 
     def decode(node):
         op = node["op"]
         if op == "literal":
-            return Expr("literal", (_decode_value(node["value"]),), SourcePosition(1, 1))
+            value = _decode_value(node["value"])
+            return Expr("literal", (value,), SourcePosition(1, 1), _value_spec(value))
         if op == "column":
             ordinal = node["ordinal"]
             if ordinal is None or ordinal >= len(columns) or columns[ordinal] != node["name"]:
                 raise _error("INVALID_CONSTRAINT", f"约束引用了未知列：{node['name']}")
-            binding = FieldBinding(0, 0, ordinal, "", node["name"], TypeSpec("NULL"))
-            return Expr("column", (None, node["name"]), SourcePosition(1, 1), None, binding)
+            spec = types[ordinal] if ordinal < len(types) else TypeSpec("NULL")
+            binding = FieldBinding(0, 0, ordinal, "", node["name"], spec)
+            return Expr("column", (None, node["name"]), SourcePosition(1, 1), spec, binding)
         args = tuple(decode(arg) if isinstance(arg, dict) and "op" in arg else _decode_value(arg)
                      for arg in node["args"])
         return Expr(op, args, SourcePosition(1, 1))

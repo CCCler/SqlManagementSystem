@@ -135,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--file", type=Path, help="执行 SQL 文件；省略时进入交互模式")
     parser.add_argument("--trace", action="store_true", help="执行 SQL 并以 JSON Lines 输出全部编译阶段及结果")
     parser.add_argument("--lock-timeout", type=float, help="数据库锁等待秒数，默认 5 秒")
+    parser.add_argument("--user", help="以账户登录；数据库已有账户时必需")
+    parser.add_argument("--password", default="", help="登录密码（配合 --user）")
     parser.add_argument("--version", action="version", version="minisql 0.1.0")
     args = parser.parse_args(argv)
     if args.lock_timeout is not None and (not math.isfinite(args.lock_timeout) or args.lock_timeout < 0):
@@ -152,6 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"无法打开数据库目录: {error}", file=sys.stderr)
         return 1
     try:
+        if args.user is not None and not database.login(args.user, args.password):
+            print("错误：登录失败（账户不存在或密码错误）", file=sys.stderr)
+            return 1
         if args.trace:
             database.compiler = TracingCompiler(database.compiler)
         if args.file is not None:

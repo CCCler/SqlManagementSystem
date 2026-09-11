@@ -70,6 +70,7 @@ class TransactionalDatabase(Database):
         self._files = None
         self._active = self._explicit = self._failed = self._broken = self._closed = False
         self._owner = None
+        self.session = None
         self.compiler = SQLCompiler()
         try:
             self._start()
@@ -96,6 +97,9 @@ class TransactionalDatabase(Database):
         self.catalog_view = ExtendedCatalogAdapter(self.catalog, self.objects, self.accounts)
         self.executor.objects = self.objects
         self.executor.accounts = self.accounts
+        self.executor.compiler = self.compiler
+        self.executor.catalog_view = self.catalog_view
+        self.executor.session = self.session
 
     def _close_file(self):
         if self._files is not None:
@@ -158,6 +162,20 @@ class TransactionalDatabase(Database):
     def rollback(self):
         return self.execute("ROLLBACK;")[0]
 
+    def login(self, name: str, password: str) -> bool:
+        """账户登录：成功后本连接以该身份执行，权限检查覆盖全部入口。"""
+        with self._guard:
+            if self.accounts is None:
+                return False
+            self.session = self.accounts.authenticate(name, password)
+            self.executor.session = self.session
+            return self.session is not None
+
+    def logout(self) -> None:
+        with self._guard:
+            self.session = None
+            self.executor.session = None
+
     def _execute_one(self, statement):
         tokens = Lexer().tokenize(statement)
         control = tokens[0].type is TokenType.KEYWORD and tokens[0].lexeme.upper() in ("BEGIN", "COMMIT", "ROLLBACK")
@@ -182,6 +200,9 @@ class TransactionalDatabase(Database):
             return ExecutionResult(message="事务已提交")
         if self._failed:
             raise _transaction_error("TRANSACTION_ABORTED", "事务已出错，必须先 ROLLBACK")
+        if self.accounts is not None and self.accounts.accounts and self.session is None:
+            # 初始化模式（无账户）不强制；一旦存在账户，全部 SQL 必须登录后执行。
+            raise _transaction_error("NOT_LOGGED_IN", "已存在账户，请先登录后再执行 SQL")
         automatic = not self._active
         if automatic:
             self._start()

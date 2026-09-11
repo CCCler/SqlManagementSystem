@@ -441,12 +441,13 @@ class ExtendedCatalogAdapter:
     # ---- 表（持久化目录 + 约束/可空/默认值补全） ----
     def _enrich(self, schema):
         """把 __constraints 中的 NOT NULL/DEFAULT/约束补回编译器可见的表结构。"""
-        from minisql.contracts.extensions import Constraint as CompilerConstraint
+        from minisql.contracts.extensions import Constraint as CompilerConstraint, column_type
         from minisql.engine.expr import deserialize_expr
         if schema is None:
             return None
         constraints = self.objects.get_constraints(schema.name)
         column_names = tuple(column.name for column in schema.columns)
+        column_types = tuple(column_type(column) for column in schema.columns)
         columns = []
         for column in schema.columns:
             nullable = not any(
@@ -458,14 +459,15 @@ class ExtendedCatalogAdapter:
             if default_constraint is not None:
                 columns.append(replace(
                     column, nullable=nullable, has_default=True,
-                    default=deserialize_expr(default_constraint.default_text, column_names)))
+                    default=deserialize_expr(default_constraint.default_text,
+                                             column_names, column_types)))
             else:
                 columns.append(replace(column, nullable=nullable))
         compiled = []
         for constraint in constraints:
             if constraint.kind in ("NOT NULL", "DEFAULT"):
                 continue  # 已并入列属性
-            expression = (deserialize_expr(constraint.expression, column_names)
+            expression = (deserialize_expr(constraint.expression, column_names, column_types)
                           if constraint.expression else None)
             compiled.append(CompilerConstraint(
                 kind=constraint.kind, columns=constraint.columns, name=constraint.name,

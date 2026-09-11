@@ -101,14 +101,15 @@ def test_distinct_on_extended_projection(db):
 
 
 def test_unsupported_operators_stay_gated(db):
-    """尚未接入的扩展（触发器）仍被屏障拒绝，不会静默改动业务数据。"""
+    """尚未接入的扩展（ALTER USER）仍被屏障拒绝，不会静默改动业务数据。"""
     from minisql.contracts.errors import ErrorStage
-    db.execute("CREATE TABLE u(id INT);")
+    db.execute("CREATE USER alice IDENTIFIED BY 'pw';")  # 初始化模式创建首个账户
+    assert db.login("alice", "pw")
     with pytest.raises(MiniSQLError) as error:
-        db.execute("CREATE TRIGGER tr AFTER INSERT ON t"
-                   " FOR EACH ROW INSERT INTO u(id) VALUES (NEW.id);")
+        db.execute("ALTER USER alice IDENTIFIED BY 'newpw';")
     assert error.value.code == "FEATURE_NOT_EXECUTABLE"
     assert error.value.stage is ErrorStage.EXECUTION
+    assert db.login("alice", "pw")  # 原密码仍有效：账户未被改动
     assert rows(db, "SELECT id FROM t;")[1] == ((1,), (2,), (3,))
 
 
