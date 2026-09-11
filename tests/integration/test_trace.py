@@ -24,7 +24,7 @@ def test_file_trace_shows_pipeline_and_real_execution(tmp_path, capsys):
     compiled = [r for r in records if r["event"] == "compilation"]
     assert len(compiled) == 3
     query = compiled[-1]
-    assert list(query) == ["event", "tokens", "ast", "semantic", "plan", "optimized_plan"]
+    assert list(query) == ["event", "tokens", "ast", "semantic", "plan", "optimized_plan", "output_fields", "dependencies", "required_capabilities"]
     assert query["tokens"][0]["position"] == {"node": "SourcePosition", "line": 3, "column": 1}
     assert query["ast"]["node"] == "SelectStmt"
     assert query["semantic"]["schema"]["name"] == "t"

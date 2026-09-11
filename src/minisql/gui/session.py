@@ -27,9 +27,10 @@ class CaptureCompiler:
 
     def compile(self, sql, catalog):
         compiled = self.compiler.compile(sql, catalog)
-        self.events.append({"sql": sql.strip(), **{
+        self.events.append({"sql": (" ".join(t.lexeme for t in compiled.tokens).strip()
+                                     if any(t.secret is not None for t in compiled.tokens) else sql.strip()), **{
             name: to_json_value(getattr(compiled, name)) for name in
-            ("tokens", "ast", "semantic", "plan", "optimized_plan")}})
+            ("tokens", "ast", "semantic", "plan", "optimized_plan", "output_fields", "dependencies", "required_capabilities")}})
         return compiled
 
 

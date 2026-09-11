@@ -105,4 +105,6 @@ class ExplainStmt:
     position: SourcePosition
 
 
-Statement: TypeAlias = CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | UpdateStmt | DropTableStmt | TransactionStmt | ExplainStmt
+from minisql.contracts.extensions import Query, Command
+
+Statement: TypeAlias = Query | Command | CreateTableStmt | InsertStmt | SelectStmt | DeleteStmt | UpdateStmt | DropTableStmt | TransactionStmt | ExplainStmt

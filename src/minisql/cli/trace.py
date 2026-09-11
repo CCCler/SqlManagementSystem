@@ -17,7 +17,8 @@ def to_json_value(value):
         return value.isoformat()
     if is_dataclass(value):
         return {"node": type(value).__name__, **{
-            field.name: to_json_value(getattr(value, field.name)) for field in fields(value)}}
+            field.name: to_json_value(getattr(value, field.name)) for field in fields(value)
+            if not field.metadata.get("sensitive")}}
     if isinstance(value, (tuple, list)):
         return [to_json_value(item) for item in value]
     if isinstance(value, dict):
@@ -40,5 +41,5 @@ class TracingCompiler:
         result = self.compiler.compile(sql, catalog)
         emit_event("compilation", **{
             name: to_json_value(getattr(result, name))
-            for name in ("tokens", "ast", "semantic", "plan", "optimized_plan")})
+            for name in ("tokens", "ast", "semantic", "plan", "optimized_plan", "output_fields", "dependencies", "required_capabilities")})
         return result

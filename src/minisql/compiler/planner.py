@@ -5,6 +5,9 @@ from minisql.contracts.plans import Update, CreateTable, Delete, DropTable, Expl
 class Planner:
     def build(self, semantic: SemanticResult) -> Plan:
         statement, schema = semantic.statement, semantic.schema
+        from minisql.contracts.extensions import BoundStatement
+        if isinstance(statement, BoundStatement):
+            return statement.plan
         if isinstance(statement, TransactionStmt):
             return TransactionControl(statement.action)
         if isinstance(statement, ExplainStmt):

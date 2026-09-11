@@ -148,11 +148,10 @@ def test_lexical_errors(sql, code, position, compile_sql):
     "SELECT * FROM student", "SELECT * FROM student WHERE (id=1;",
     "SELECT * FROM student WHERE id < 1 < 2;", "SELECT * FROM student;;",
     "SELECT * FROM student; SELECT * FROM student;", "CREATE TABLE t ();",
-    "CREATE TABLE t (a VARCHAR(10));", "CREATE TABLE t (a BOOL);",
+    "CREATE TABLE t (a VARCHAR(10));",
     "INSERT INTO student VALUES (1,'x');", "INSERT INTO student (id,name) VALUES (1+2,'x');",
     "INSERT INTO student (id,name) VALUES (-TRUE,'x');", "SELECT * FROM student WHERE -id=1;",
-    "SELECT * FROM student WHERE id=1.2;",
-    "SELECT * FROM student WHERE id * 2=4;", "SELECT * FROM student WHERE id=+1;",
+    "SELECT * FROM student WHERE id=+1;",
     "UPDATE student;", "SELECT 'FROM' student;", "SELECT name, FROM student;", "", ";",
 ])
 def test_invalid_syntax(sql, compile_sql):
@@ -178,7 +177,6 @@ def test_missing_semicolon_exact_location(compile_sql):
     ("DELETE FROM missing;", "UNKNOWN_TABLE"),
     ("INSERT INTO missing (id) VALUES (1);", "UNKNOWN_TABLE"),
     ("SELECT missing FROM student;", "UNKNOWN_COLUMN"),
-    ("SELECT * FROM student WHERE id=NULL;", "UNKNOWN_COLUMN"),
     ("DELETE FROM student WHERE missing=1;", "UNKNOWN_COLUMN"),
     ("INSERT INTO student (id,missing) VALUES (1,'x');", "UNKNOWN_COLUMN"),
     ("INSERT INTO student (id,ID) VALUES (1,2);", "DUPLICATE_COLUMN"),

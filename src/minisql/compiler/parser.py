@@ -14,7 +14,37 @@ class Parser:
         if not tokens or tokens[-1].type is not TokenType.EOF:
             raise MiniSQLError(ErrorStage.SYNTAX, "UNEXPECTED_TOKEN", "缺少 EOF",
                                tokens[-1].position if tokens else SourcePosition(1, 1), ("EOF",))
-        return _Parser(tokens).statement()
+        try:
+            result = _Parser(tokens).statement()
+        except MiniSQLError as original:
+            if original.code == "EXPRESSION_TOO_COMPLEX":
+                raise
+            from minisql.compiler.extended_parser import ExtendedParser
+            result = ExtendedParser(tokens).parse()
+        validate_ast_budget(result)
+        return result
+
+
+def validate_ast_budget(ast):
+    """迭代计数，兼容旧 AST，先于语义递归执行。"""
+    from dataclasses import fields, is_dataclass
+    from minisql.contracts.extensions import Query
+    pending = [(ast, 0)]
+    count = 0
+    while pending:
+        item, depth = pending.pop()
+        if isinstance(item, Query):
+            depth += 1
+            if depth > 16:
+                raise MiniSQLError(ErrorStage.SYNTAX, 'QUERY_TOO_DEEP', '查询树深度超过 16', item.position)
+        if is_dataclass(item):
+            count += 1
+            if count > 4096:
+                raise MiniSQLError(ErrorStage.SYNTAX, 'STATEMENT_TOO_COMPLEX', '语句节点超过 4096', getattr(item, 'position', SourcePosition(1, 1)))
+            pending.extend((getattr(item, f.name), depth) for f in fields(item)
+                           if f.name not in ('position', 'type') and not f.metadata.get('sensitive'))
+        elif isinstance(item, (tuple, list)):
+            pending.extend((child, depth) for child in item)
 
 
 class _Parser:

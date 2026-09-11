@@ -74,12 +74,14 @@ class Explain:
     plan: "Plan"
 
 
-Plan: TypeAlias = CreateTable | Insert | QueryPlan | Delete | Update | DropTable | TransactionControl | Explain
+from minisql.contracts.extensions import ExtendedPlan, BoundStatement, OutputField, ObjectDependency
+
+Plan: TypeAlias = ExtendedPlan | CreateTable | Insert | QueryPlan | Delete | Update | DropTable | TransactionControl | Explain
 
 
 @dataclass(frozen=True)
 class SemanticResult:
-    statement: Statement
+    statement: Statement | BoundStatement
     schema: TableSchema | None  # 事务控制语句不绑定表。
     message: str = "语义检查通过"
 
@@ -91,3 +93,6 @@ class CompilationResult:
     semantic: SemanticResult
     plan: Plan
     optimized_plan: Plan
+    output_fields: tuple[OutputField, ...] = ()
+    dependencies: tuple[ObjectDependency, ...] = ()
+    required_capabilities: tuple[str, ...] = ()

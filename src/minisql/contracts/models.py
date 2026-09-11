@@ -1,8 +1,8 @@
 """共享类型：位置从 1 开始，记录按表定义的列顺序存储。"""
-from dataclasses import dataclass
-from datetime import date, datetime, time
-from decimal import Decimal
+from dataclasses import dataclass, field
 from enum import Enum
+from decimal import Decimal
+from datetime import date, time, datetime
 from typing import TypeAlias
 
 
@@ -41,14 +41,18 @@ class Token:
     type: TokenType
     lexeme: str
     position: SourcePosition
+    secret: str | None = field(default=None, repr=False, compare=False, metadata={"sensitive": True})
 
 
 @dataclass(frozen=True)
 class ColumnSchema:
     name: str
     data_type: DataType
-    precision: int | None = None  # DECIMAL 总位数（仅 DECIMAL 使用）
-    scale: int | None = None      # DECIMAL 小数位（仅 DECIMAL 使用）
+    precision: int | None = None
+    scale: int | None = None
+    nullable: bool = True
+    default: object = None
+    has_default: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,7 @@ class TableSchema:
     name: str
     columns: tuple[ColumnSchema, ...]
     table_id: int | None = None  # 存储模块在执行建表时分配
+    constraints: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)

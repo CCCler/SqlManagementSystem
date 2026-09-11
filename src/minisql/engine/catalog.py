@@ -3,6 +3,7 @@
 bootstrap 直接通过存储接口初始化或恢复目录，不经过 SQL 编译；
 register_table 注册已分配 table_id 的表结构。"""
 from dataclasses import replace
+import re
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import RecordStorage
@@ -20,6 +21,30 @@ SYSTEM_CATALOG = TableSchema(
     ),
     table_id=0,
 )
+
+
+def _column_type_text(column: ColumnSchema) -> str:
+    """复用目录的 VARCHAR 类型字段保存参数，不改变系统表布局。"""
+    p, s = column.precision, column.scale
+    if p is None and s is None:
+        return column.data_type.value
+    if (column.data_type is not DataType.DECIMAL or type(p) is not int or
+            type(s) is not int or not 1 <= p <= 38 or not 0 <= s <= p):
+        raise MiniSQLError(ErrorStage.STORAGE, 'INVALID_SCHEMA', '非法字段类型参数')
+    return f'DECIMAL({p},{s})'
+
+
+def _restore_column(name: str, text: str) -> ColumnSchema:
+    # 旧库的 INT/VARCHAR/DECIMAL 等裸类型名继续原样恢复。
+    match = re.fullmatch(r'DECIMAL\(([0-9]{1,2}),([0-9]{1,2})\)', text) if isinstance(text, str) else None
+    try:
+        if match:
+            column = ColumnSchema(name, DataType.DECIMAL, int(match[1]), int(match[2]))
+            _column_type_text(column)
+            return column
+        return ColumnSchema(name, DataType(text))
+    except (ValueError, TypeError, MiniSQLError) as error:
+        raise MiniSQLError(ErrorStage.STORAGE, 'CORRUPT_CATALOG', '目录中存在非法字段类型描述') from error
 
 
 class PersistentCatalog:
@@ -40,7 +65,7 @@ class PersistentCatalog:
             if table_id == 0:
                 continue
             columns_by_table.setdefault((table_id, table_name), {})[column_index] = (
-                ColumnSchema(column_name, DataType(column_type))
+                _restore_column(column_name, column_type)
             )
         self.tables = {
             table_name.lower(): TableSchema(
@@ -63,9 +88,10 @@ class PersistentCatalog:
             raise MiniSQLError(ErrorStage.SEMANTIC, "DUPLICATE_TABLE", key)
         if schema.table_id is None:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", "表尚未分配 table_id")
+        type_texts = tuple(_column_type_text(column) for column in schema.columns)
         for index, column in enumerate(schema.columns):
             self.storage.insert(
-                SYSTEM_CATALOG, (schema.table_id, key, index, column.name, column.data_type.value),
+                SYSTEM_CATALOG, (schema.table_id, key, index, column.name, type_texts[index]),
             )
         self.storage.flush()
         self.tables[key] = replace(schema, name=key)

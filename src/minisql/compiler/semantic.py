@@ -10,6 +10,10 @@ from minisql.contracts.plans import SemanticResult
 
 class SemanticAnalyzer:
     def analyze(self, statement: Statement, catalog: CatalogReader) -> SemanticResult:
+        from minisql.contracts.extensions import Query, Command
+        if isinstance(statement, (Query, Command)):
+            from minisql.compiler.extended_semantic import Binder
+            return SemanticResult(Binder(catalog).bind(statement), None)
         if isinstance(statement, TransactionStmt):
             return SemanticResult(statement, None)
         if isinstance(statement, ExplainStmt):

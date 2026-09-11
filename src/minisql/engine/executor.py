@@ -55,6 +55,12 @@ def _indent(text: str) -> str:
 
 def render_plan(plan: Plan) -> str:
     """把计划渲染为可读的缩进树；供 EXPLAIN 只读展示，不执行任何算子。"""
+    from minisql.contracts.extensions import ExtendedPlan
+    if isinstance(plan, ExtendedPlan):
+        from minisql.cli.trace import to_json_value
+        import json
+        from minisql.compiler.extended_optimizer import collect_capabilities
+        return "编译计划（执行待接入：" + ", ".join(collect_capabilities(plan)) + "）\n" + json.dumps(to_json_value(plan), ensure_ascii=False, indent=2)
     if isinstance(plan, Explain):
         return render_plan(plan.plan)
     if isinstance(plan, SeqScan):
@@ -97,6 +103,12 @@ class PlanExecutor:
         self.catalog = catalog
 
     def execute(self, plan: Plan) -> ExecutionResult:
+        from minisql.contracts.extensions import ExtendedPlan
+        if isinstance(plan, ExtendedPlan) and plan.operator == "Explain":
+            return ExecutionResult(message=render_plan(plan.children[0]))
+        if not isinstance(plan, Explain):
+            from minisql.compiler.capabilities import require_legacy_plan
+            require_legacy_plan(plan)
         if isinstance(plan, Explain):
             return ExecutionResult(message=render_plan(plan.plan))
         if isinstance(plan, CreateTable):

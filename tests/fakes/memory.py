@@ -116,3 +116,39 @@ class MemoryStorage:
 
     def close(self) -> None:
         pass  # 测试替身无文件资源
+
+
+class ExtendedMemoryCatalog(MemoryCatalog):
+    """扩展编译独立验收；对象均由夹具显式提供。"""
+    def __init__(self, schemas=(), *, views=(), indexes=(), triggers=(), accounts=(), dependencies=None, databases=("main",)):
+        super().__init__(schemas)
+        self.views = {v.name: v for v in views}
+        self.indexes = {v.name: v for v in indexes}
+        self.triggers = {v.name: v for v in triggers}
+        self.accounts = {name: object() for name in accounts}
+        self.dependencies = dependencies or {}
+        self.databases = set(databases)
+
+    def get_view(self, name):
+        return self.views.get(name.lower())
+
+    def get_index(self, name):
+        return self.indexes.get(name.lower())
+
+    def list_indexes(self, table):
+        return tuple(i for i in self.indexes.values() if i.table == table.lower())
+
+    def get_trigger(self, name):
+        return self.triggers.get(name.lower())
+
+    def list_triggers(self):
+        return tuple(self.triggers.values())
+
+    def get_account(self, name):
+        return self.accounts.get(name.lower())
+
+    def get_dependencies(self, kind, name):
+        return self.dependencies.get((kind, name.lower()), ())
+
+    def has_database(self, name):
+        return name.lower() in self.databases

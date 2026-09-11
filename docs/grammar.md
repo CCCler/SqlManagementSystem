@@ -58,3 +58,72 @@ BEGIN、COMMIT、ROLLBACK 为保留关键字，不可用作标识符。事务控
 UPDATE 支持多列赋值，右侧使用现有表达式语法，类型必须与目标列一致，不支持隐式转换、重复赋值或 UPDATE 的 ORDER BY/LIMIT。所有赋值读取更新前的行，省略 WHERE 更新全部记录，影响行数按匹配行计（包含值未变化的行）。每个 SET 右侧表达式与 WHERE 各自最多 64 个结构 Token。UPDATE、SET 新增为保留关键字；旧数据库若使用这两个名称作为表名或列名，需要在升级前改用其他名称。EXPLAIN 内层语句与外层共用一个结尾分号。
 
 UPDATE 复用堆存储的插入与删除，更新记录的 RecordId 和无 ORDER BY 时的扫描顺序可能改变；未更新记录的 RecordId 保持不变。变长记录允许迁移到其他页，文件格式不变。自动提交时失败恢复整条 UPDATE；显式事务失败后必须 ROLLBACK。
+
+
+## 编译器扩展文法（执行与存储待接入）
+
+以下补充只表示编译器接受的语法。旧语句执行行为保留；新计划由执行能力屏障拒绝执行，EXPLAIN 可展示。语义和类型细节以 [SQL 扩展编译器报告](SQL扩展编译器报告.md) 为准。
+
+```ebnf
+query          = union-query, ["ORDER BY", order, {",", order}],
+                 ["LIMIT", uint, ["OFFSET", uint]] ;
+union-query    = intersect-query, {("UNION", ["ALL"] | "EXCEPT"), intersect-query} ;
+intersect-query= query-primary, {"INTERSECT", query-primary} ;
+query-primary  = "(", query, ")" | "SELECT", ["DISTINCT"], item, {",", item},
+                 "FROM", source, {join}, ["WHERE", expr],
+                 ["GROUP BY", expr, {",", expr}], ["HAVING", expr] ;
+item           = ("*" | identifier, ".*" | expr), [["AS"], identifier] ;
+source         = identifier, [["AS"], identifier] | "(", query, ")", ["AS"], identifier ;
+join           = ["INNER" | "LEFT" | "RIGHT"], "JOIN", source, "ON", expr
+               | "CROSS JOIN", source ;
+order          = expr, ["ASC" | "DESC"] ;
+expr           = or-expr ;
+or-expr        = and-expr, {"OR", and-expr} ;
+and-expr       = not-expr, {"AND", not-expr} ;
+not-expr       = "NOT", not-expr | comparison ;
+comparison     = sum, [compare-op, sum | "IS", ["NOT"], "NULL"
+               | ["NOT"], "BETWEEN", sum, "AND", sum
+               | ["NOT"], "LIKE", sum, ["ESCAPE", sum]
+               | ["NOT"], "IN", "(", (query | expr, {",", expr}), ")"] ;
+sum            = product, {("+" | "-"), product} ;
+product        = primary, {("*" | "/"), primary} ;
+primary        = literal | [identifier, "."], identifier | "(", expr, ")"
+               | "(", query, ")" | "EXISTS", "(", query, ")"
+               | "COUNT", "(", ("*" | expr), ")"
+               | ("SUM" | "AVG" | "MAX" | "MIN"), "(", expr, ")" ;
+literal        = ["-"], number | string | "TRUE" | "FALSE" | "NULL"
+               | ("DATE" | "TIME" | "TIMESTAMP"), string ;
+type           = "INT" | "VARCHAR" | "BOOL" | "DATE" | "TIME" | "TIMESTAMP"
+               | "DECIMAL", ["(", uint, ",", uint, ")"] ;
+column         = identifier, type, {"NOT NULL" | "NULL" | "DEFAULT", expr | column-constraint} ;
+column-constraint = ["CONSTRAINT", identifier],
+                 ("PRIMARY KEY" | "UNIQUE" | "REFERENCES", identifier, names, {reference-action}
+                  | "CHECK", "(", expr, ")") ;
+table-constraint = ["CONSTRAINT", identifier],
+                 ("PRIMARY KEY", names | "UNIQUE", names
+                 | "FOREIGN KEY", names, "REFERENCES", identifier, names, {reference-action}
+                 | "CHECK", "(", expr, ")") ;
+reference-action = "ON", ("DELETE" | "UPDATE"), ("RESTRICT" | "NO ACTION") ;
+create-table   = "CREATE TABLE", identifier, "(", (column | table-constraint),
+                 {",", (column | table-constraint)}, ")", ";" ;
+alter-table    = "ALTER TABLE", identifier,
+                 ("ADD COLUMN", column | "DROP COLUMN", identifier
+                 | "RENAME COLUMN", identifier, "TO", identifier | "RENAME TO", identifier
+                 | "ALTER COLUMN", identifier, "TYPE", type
+                 | "ADD", table-constraint | "DROP CONSTRAINT", identifier), ";" ;
+create-index   = "CREATE", ["UNIQUE"], "INDEX", identifier, "ON", identifier, names, ";" ;
+create-view    = "CREATE VIEW", identifier, [names], "AS", query, ";" ;
+create-trigger = "CREATE TRIGGER", identifier, "AFTER", ("INSERT" | "UPDATE" | "DELETE"),
+                 "ON", identifier, "FOR EACH ROW",
+                 (action | "BEGIN", action, ";", {action, ";"}, "END"), ";" ;
+action         = insert-without-semicolon | update-without-semicolon
+               | delete-without-semicolon | query ;
+user           = ("CREATE" | "ALTER"), "USER", identifier, "IDENTIFIED BY", string, ";"
+               | "DROP USER", identifier, ";" ;
+grant          = "GRANT", permissions, "ON", object-kind, identifier, "TO", identifier, ";"
+               | "REVOKE", permissions, "ON", object-kind, identifier, "FROM", identifier, ";" ;
+object-kind    = "TABLE" | "VIEW" | "DATABASE" | "INDEX" | "TRIGGER" ;
+drop-object    = "DROP", ("INDEX" | "VIEW" | "TRIGGER"), identifier, ";" ;
+```
+
+`names` 为非空括号列名列表；ADD 约束必须命名；OLD/NEW 仅在对应触发动作可绑定。权限集合按对象种类语义检查。EXPLAIN 接受查询及已编译的扩展管理语句，不执行内部操作。每表达式结构预算 64、查询树/视图深度 16、语句 AST 节点 4096。

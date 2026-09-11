@@ -55,6 +55,13 @@ const originReady = new Promise((resolve,reject) => {
   const bad=await run("UPDATE t SET age='bad';",false);
   assert.equal(bad.error.code,'TYPE_MISMATCH');
   assert.match(await page.locator('#results').innerText(),/TYPE_MISMATCH/);
+  const explain = await run('EXPLAIN SELECT a.id FROM t a JOIN t b ON a.id=b.id;');
+  assert.equal(explain.compilations.length,1);
+  assert.match(await page.locator('#results').innerText(),/执行待接入/);
+  assert.match(await page.locator('#results').innerText(),/Join/);
+  const unsupported = await run('UPDATE t SET age=age*2;',false);
+  assert.equal(unsupported.error.code,'FEATURE_NOT_EXECUTABLE');
+  assert.equal((await run('SELECT * FROM t;')).results[0].rows[0][1],21);
   assert.deepEqual(errors,[]);
   await page.screenshot({path:path.join(directory,'update.png'),fullPage:true});
   console.log('UPDATE browser checks passed: affected rows, highlight, compilation, query, escaping, rollback, errors.');

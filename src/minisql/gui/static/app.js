@@ -257,7 +257,7 @@ function renderResults(data) {
   else {
     const selects = []; const dml = [];
     data.results.forEach((result, index) => {
-      (result.columns && result.columns.length ? selects : dml).push([result, index]);
+      (result.columns && result.columns.length || result.message?.startsWith("编译计划") ? selects : dml).push([result, index]);
     });
     selects.forEach(([result, index]) => results.append(resultBlock(result, index)));
     if (dml.length) results.append(dmlSummaryBlock(dml));
