@@ -1,11 +1,15 @@
 """SQL 扩展阶段牵头契约的内存替身。
 
 实现 docs/SQL扩展接口示例-成员三.md 提议的 ObjectCatalog / DependencyTracker
-语义；正式类型与持久化实现已落在 minisql.engine.objects（本文件再导出，
-保持既有导入路径），本替身继续作为隔离测试夹具，与持久化实现并行跑
-同一套契约测试。"""
+语义；正式类型在 minisql.engine.objects（本文件再导出，保持既有导入路径），
+本替身继续作为隔离测试夹具，与持久化实现并行跑同一套契约测试。
+
+约束登记需要表结构解析列序号，构造时可用 schemas 提供（与持久化实现
+从 Catalog 解析的行为一致）。"""
 from minisql.contracts.errors import ErrorStage, MiniSQLError
-from minisql.engine.objects import IndexDefinition, TriggerDefinition, ViewDefinition
+from minisql.engine.objects import (
+    CONSTRAINT_KINDS, ConstraintDefinition, IndexDefinition, TriggerDefinition, ViewDefinition,
+)
 
 
 def _error(stage: ErrorStage, code: str, reason: str) -> MiniSQLError:
@@ -13,17 +17,17 @@ def _error(stage: ErrorStage, code: str, reason: str) -> MiniSQLError:
 
 
 class MemoryObjectCatalog:
-    """ObjectCatalog 提议接口的内存实现：视图/触发器/索引定义的管理。
+    """ObjectCatalog 提议接口的内存实现：视图/触发器/索引/约束定义的管理。
 
     名称统一小写键、大小写不敏感；重名注册报 DUPLICATE_OBJECT；
-    注销不存在的对象报 UNKNOWN_OBJECT。持久化实现按 __views/__triggers/
-    __indexes 系统表布局落地后替换本替身，语义不变。
-    """
+    注销不存在的对象报 UNKNOWN_OBJECT。"""
 
-    def __init__(self):
+    def __init__(self, schemas: dict[str, tuple[str, ...]] | None = None):
+        self._schemas = {key.lower(): tuple(columns) for key, columns in (schemas or {}).items()}
         self._views: dict[str, ViewDefinition] = {}
         self._triggers: dict[str, TriggerDefinition] = {}
         self._indexes: dict[str, IndexDefinition] = {}
+        self._constraints: dict[str, dict[str, ConstraintDefinition]] = {}
 
     # ---- 视图 ----
     def register_view(self, view: ViewDefinition) -> None:
@@ -53,10 +57,10 @@ class MemoryObjectCatalog:
         return self._triggers.get(name.lower())
 
     def get_triggers(self, table: str, event: str) -> tuple[TriggerDefinition, ...]:
-        """指定表的指定事件的全部触发器，按创建先后排序。"""
+        """指定表的指定事件的全部触发器，按创建时间先后排序（同刻按名称）。"""
         key = table.lower()
         matched = [t for t in self._triggers.values() if t.table == key and t.event == event.upper()]
-        return tuple(sorted(matched, key=lambda trigger: trigger.created_order))
+        return tuple(sorted(matched, key=lambda trigger: (trigger.created_at, trigger.name)))
 
     def unregister_trigger(self, name: str) -> None:
         if self._triggers.pop(name.lower(), None) is None:
@@ -67,6 +71,8 @@ class MemoryObjectCatalog:
         key = index.name.lower()
         if key in self._indexes:
             raise _error(ErrorStage.SEMANTIC, "DUPLICATE_OBJECT", f"索引 {index.name} 已存在")
+        if index.root_page is None:
+            raise _error(ErrorStage.SEMANTIC, "INVALID_RECORD", f"索引 {index.name} 缺少 root_page，无法重开恢复")
         self._indexes[key] = index
 
     def get_index(self, name: str) -> IndexDefinition | None:
@@ -79,6 +85,41 @@ class MemoryObjectCatalog:
     def unregister_index(self, name: str) -> None:
         if self._indexes.pop(name.lower(), None) is None:
             raise _error(ErrorStage.SEMANTIC, "UNKNOWN_OBJECT", f"索引 {name} 不存在")
+
+    # ---- 约束（F07） ----
+    def register_constraint(self, constraint: ConstraintDefinition) -> None:
+        if constraint.kind not in CONSTRAINT_KINDS:
+            raise _error(ErrorStage.SEMANTIC, "UNKNOWN_CONSTRAINT_KIND", constraint.kind)
+        table_key = constraint.table.lower()
+        name_key = constraint.name.lower()
+        if name_key in self._constraints.get(table_key, {}):
+            raise _error(ErrorStage.SEMANTIC, "DUPLICATE_OBJECT", f"约束 {constraint.name} 已存在")
+        columns = self._schemas.get(table_key)
+        if columns is None:
+            raise _error(ErrorStage.SEMANTIC, "UNKNOWN_TABLE", constraint.table)
+        for name in constraint.columns:
+            if name not in columns:
+                raise _error(ErrorStage.SEMANTIC, "UNKNOWN_COLUMN", name)
+        self._constraints.setdefault(table_key, {})[name_key] = constraint
+
+    def get_constraints(self, table: str) -> tuple[ConstraintDefinition, ...]:
+        """指定表的全部约束，按约束名排序。"""
+        key = table.lower()
+        return tuple(sorted(self._constraints.get(key, {}).values(), key=lambda item: item.name))
+
+    def unregister_constraints(self, table: str, name: str | None = None) -> None:
+        """移除指定表的全部约束，或仅移除具名约束。"""
+        table_key = table.lower()
+        names = [name.lower()] if name is not None else list(self._constraints.get(table_key, {}))
+        if not names:
+            if name is not None:
+                raise _error(ErrorStage.SEMANTIC, "UNKNOWN_OBJECT", f"约束 {name} 不存在")
+            return
+        for name_key in names:
+            if name_key not in self._constraints.get(table_key, {}):
+                raise _error(ErrorStage.SEMANTIC, "UNKNOWN_OBJECT", f"约束 {name} 不存在")
+        for name_key in names:
+            del self._constraints[table_key][name_key]
 
 
 class DependencyTracker:

@@ -31,6 +31,8 @@ class SemanticAnalyzer:
 
         if isinstance(statement, CreateTableStmt):
             schema = normalize_schema(statement.schema)
+            if schema.name.startswith("__"):
+                fail("PROTECTED_TABLE", "不能创建系统表", statement.position)
             if catalog.get_table(schema.name) is not None:
                 fail("DUPLICATE_TABLE", f"表已存在：{schema.name}")
             seen = set()
@@ -43,10 +45,9 @@ class SemanticAnalyzer:
             return SemanticResult(replace(statement, schema=schema), schema)
 
         table = identifier(statement.table)
-        if isinstance(statement, DropTableStmt) and table.name == "__catalog":
-            fail("PROTECTED_TABLE", "不能删除系统目录表", table.position)
-        if isinstance(statement, UpdateStmt) and table.name == "__catalog":
-            fail("PROTECTED_TABLE", "不能更新系统目录表", table.position)
+        if table.name.startswith("__"):
+            # 与 extended_semantic 同规则：系统表禁止经 SQL 读写（保留位置信息）。
+            fail("PROTECTED_TABLE", f"不能通过 SQL 访问系统表：{table.name}", table.position)
         schema = catalog.get_table(table.name)
         if schema is None:
             fail("UNKNOWN_TABLE", f"未知表：{table.name}", table.position)

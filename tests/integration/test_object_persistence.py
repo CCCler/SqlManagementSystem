@@ -1,27 +1,32 @@
 """对象系统表与账户存储的真实文件持久化验收。
 
-对象定义、依赖与账户授权全部通过真实页存储写入系统表，关闭重开后完整恢复；
-这是成员二存储侧验证所依赖的正式接口证据。"""
+对象定义、约束、依赖与账户授权全部通过真实页存储写入系统表，关闭重开后
+完整恢复；这是成员二存储侧验证所依赖的正式接口证据。"""
 import pytest
 
 from minisql.contracts.errors import MiniSQLError
 from minisql.contracts.models import ColumnSchema, DataType
 from minisql.engine.database import open_database
-from minisql.engine.objects import IndexDefinition, TriggerDefinition, ViewDefinition
+from minisql.engine.objects import (
+    ConstraintDefinition, IndexDefinition, TriggerDefinition, ViewDefinition,
+)
 
 
 def test_object_tables_roundtrip_real_storage(tmp_path):
     path = tmp_path / "db"
     database = open_database(path)
+    database.execute("CREATE TABLE t(id INT, name VARCHAR);")
     database.objects.register_view(
         ViewDefinition("v1", "SELECT id FROM t;", (ColumnSchema("id", DataType.INT),)))
     database.objects.register_trigger(
-        TriggerDefinition("tr1", "t", "INSERT", "SELECT 1;", created_order=1))
-    database.objects.register_index(IndexDefinition("i1", "t", ("id",), unique=True))
+        TriggerDefinition("tr1", "t", "INSERT", "SELECT 1;", "AFTER", "2026-09-11T10:00:01"))
+    database.objects.register_index(IndexDefinition("i1", "t", ("id",), unique=True, root_page=5))
+    database.objects.register_constraint(ConstraintDefinition("t", "pk_t", "PRIMARY KEY", ("id",)))
+    database.objects.register_constraint(ConstraintDefinition(
+        "t", "ck_t", "CHECK", ("name",), expression="name <> ''"))
     database.objects.add_dependency("view", "v1", "table", "t")
     database.accounts.create_account("root", "pw", is_admin=True, iterations=1000)
     database.accounts.grant("root", "SELECT", "table", "t")
-    database.execute("CREATE TABLE t(id INT);")
     database.close()
 
     reopened = open_database(path)
@@ -29,7 +34,12 @@ def test_object_tables_roundtrip_real_storage(tmp_path):
         view = reopened.objects.get_view("V1")
         assert view == ViewDefinition("v1", "SELECT id FROM t;", (ColumnSchema("id", DataType.INT),))
         assert reopened.objects.get_triggers("t", "INSERT")[0].name == "tr1"
-        assert reopened.objects.get_index("I1").unique is True
+        index = reopened.objects.get_index("I1")
+        assert index.unique is True and index.root_page == 5  # root_page 持久化供重开构造 B+ 树
+        constraints = reopened.objects.get_constraints("t")
+        assert tuple((c.name, c.kind, c.columns) for c in constraints) == (
+            ("ck_t", "CHECK", ("name",)), ("pk_t", "PRIMARY KEY", ("id",)))
+        assert constraints[0].expression == "name <> ''"
         with pytest.raises(MiniSQLError) as error:
             reopened.objects.assert_droppable("table", "t")
         assert error.value.code == "DEPENDENT_OBJECT"
@@ -56,6 +66,24 @@ def test_object_unregister_persists_across_restart(tmp_path):
     try:
         assert reopened.objects.get_view("v1") is None
         assert reopened.objects.get_view("v2") is not None
+    finally:
+        reopened.close()
+
+
+def test_constraint_unregister_persists_across_restart(tmp_path):
+    path = tmp_path / "db"
+    database = open_database(path)
+    database.execute("CREATE TABLE t(id INT, name VARCHAR);")
+    database.objects.register_constraint(ConstraintDefinition("t", "nn_t", "NOT NULL", ("name",)))
+    database.objects.register_constraint(ConstraintDefinition("t", "pk_t", "PRIMARY KEY", ("id",)))
+    database.objects.unregister_constraints("t", "pk_t")
+    database.close()
+
+    reopened = open_database(path)
+    try:
+        constraints = reopened.objects.get_constraints("t")
+        assert tuple(c.name for c in constraints) == ("nn_t",)
+        assert constraints[0].kind == "NOT NULL" and constraints[0].columns == ("name",)
     finally:
         reopened.close()
 
@@ -88,6 +116,7 @@ def test_old_database_coexists_without_id_collision(tmp_path):
     from minisql.storage.file_manager import FileManager
     from minisql.storage.page import DiskPageManager
     from minisql.storage.record import HeapStorage
+    from minisql.contracts.models import TableSchema
 
     path = tmp_path / "old.db"
     files = FileManager(path)
@@ -96,7 +125,6 @@ def test_old_database_coexists_without_id_collision(tmp_path):
     storage = HeapStorage(pages, buffer)
     catalog = PersistentCatalog(storage)
     catalog.bootstrap()
-    from minisql.contracts.models import TableSchema
     user_table = storage.create_table(TableSchema("t", (ColumnSchema("id", DataType.INT),)))
     catalog.register_table(user_table)
     assert user_table.table_id == 1  # 旧库用户表已占 1 号
@@ -104,6 +132,8 @@ def test_old_database_coexists_without_id_collision(tmp_path):
     objects.bootstrap()
     # 对象系统表在用户表之后动态分配，不冲突；用户表可正常读写。
     objects.register_view(ViewDefinition("v1", "SELECT 1;", (ColumnSchema("id", DataType.INT),)))
+    objects.register_index(IndexDefinition("i1", "t", ("id",), root_page=9))
     assert catalog.get_table("t") == user_table
     assert objects.get_view("v1") is not None
+    assert objects.get_index("i1").root_page == 9
     storage.close()

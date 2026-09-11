@@ -5,26 +5,32 @@
 import pytest
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
-from minisql.contracts.models import ColumnSchema, DataType
+from minisql.contracts.models import ColumnSchema, DataType, TableSchema
 from minisql.engine.auth import AccountStore, create_account
 from minisql.engine.catalog import PersistentCatalog
-from minisql.engine.objects import PersistentAccountStore, PersistentObjectCatalog
+from minisql.engine.objects import (
+    ConstraintDefinition, PersistentAccountStore, PersistentObjectCatalog,
+)
 from tests.fakes.extension import (
     DependencyTracker, IndexDefinition, MemoryObjectCatalog, TriggerDefinition, ViewDefinition,
 )
 from tests.fakes.memory import MemoryStorage
 
 ITERATIONS = 1000
+SCHEMAS = {"t": ("id", "name")}
 
 
 def memory_objects():
-    return MemoryObjectCatalog()
+    return MemoryObjectCatalog(SCHEMAS)
 
 
 def persistent_objects():
     storage = MemoryStorage()
     catalog = PersistentCatalog(storage)
     catalog.bootstrap()
+    table = storage.create_table(TableSchema("t", (
+        ColumnSchema("id", DataType.INT), ColumnSchema("name", DataType.VARCHAR))))
+    catalog.register_table(table)
     objects = PersistentObjectCatalog(storage, catalog)
     objects.bootstrap()
     return objects
@@ -87,23 +93,61 @@ def test_view_registration_and_lookup_contract(object_catalog):
 
 
 def test_trigger_ordering_and_event_filter_contract(object_catalog):
-    object_catalog.register_trigger(
-        TriggerDefinition("t2", "orders", "INSERT", "SELECT 1;", created_order=2))
-    object_catalog.register_trigger(
-        TriggerDefinition("t1", "orders", "INSERT", "SELECT 1;", created_order=1))
-    object_catalog.register_trigger(
-        TriggerDefinition("t3", "orders", "DELETE", "SELECT 1;", created_order=0))
+    object_catalog.register_trigger(TriggerDefinition(
+        "t2", "orders", "INSERT", "SELECT 1;", "AFTER", "2026-09-11T10:00:02"))
+    object_catalog.register_trigger(TriggerDefinition(
+        "t1", "orders", "INSERT", "SELECT 1;", "AFTER", "2026-09-11T10:00:01"))
+    object_catalog.register_trigger(TriggerDefinition(
+        "t3", "orders", "DELETE", "SELECT 1;", "AFTER", "2026-09-11T10:00:03"))
     inserts = object_catalog.get_triggers("ORDERS", "insert")
-    assert tuple(t.name for t in inserts) == ("t1", "t2")  # 同事件按创建先后
+    assert tuple(t.name for t in inserts) == ("t1", "t2")  # 同事件按创建时间先后
     assert tuple(t.name for t in object_catalog.get_triggers("orders", "DELETE")) == ("t3",)
 
 
 def test_index_listing_contract(object_catalog):
-    object_catalog.register_index(IndexDefinition("i1", "t", ("id",), unique=True))
-    object_catalog.register_index(IndexDefinition("i2", "t", ("name", "id")))
+    object_catalog.register_index(IndexDefinition("i1", "t", ("id",), unique=True, root_page=5))
+    object_catalog.register_index(IndexDefinition("i2", "t", ("name", "id"), root_page=7))
     assert object_catalog.get_index("I1").unique is True
+    assert object_catalog.get_index("i1").root_page == 5
     assert tuple(index.name for index in object_catalog.get_indexes("t")) == ("i1", "i2")
     assert object_catalog.get_indexes("other") == ()
+
+
+def test_index_requires_root_page_contract(object_catalog):
+    """成员二约定：root_page 不持久化则无法重开构造 B+ 树，登记时必填。"""
+    with pytest.raises(MiniSQLError) as error:
+        object_catalog.register_index(IndexDefinition("i1", "t", ("id",)))
+    assert error.value.code == "INVALID_RECORD"
+
+
+def test_constraint_registration_contract(object_catalog):
+    object_catalog.register_constraint(ConstraintDefinition(
+        "t", "pk_t", "PRIMARY KEY", ("id",)))
+    object_catalog.register_constraint(ConstraintDefinition(
+        "t", "ck_t", "CHECK", ("name",), expression="name <> ''"))
+    constraints = object_catalog.get_constraints("T")
+    assert tuple(c.name for c in constraints) == ("ck_t", "pk_t")  # 按约束名排序
+    assert constraints[1].columns == ("id",)
+    assert constraints[0].expression == "name <> ''"
+    with pytest.raises(MiniSQLError) as error:
+        object_catalog.register_constraint(ConstraintDefinition("t", "pk_t", "UNIQUE", ("name",)))
+    assert error.value.code == "DUPLICATE_OBJECT"
+    with pytest.raises(MiniSQLError) as error:
+        object_catalog.register_constraint(ConstraintDefinition("t", "bad", "FLY", ("id",)))
+    assert error.value.code == "UNKNOWN_CONSTRAINT_KIND"
+    object_catalog.unregister_constraints("t", "ck_t")
+    assert tuple(c.name for c in object_catalog.get_constraints("t")) == ("pk_t",)
+    object_catalog.unregister_constraints("t")
+    assert object_catalog.get_constraints("t") == ()
+
+
+def test_constraint_rejects_unknown_table_and_column(object_catalog):
+    with pytest.raises(MiniSQLError) as error:
+        object_catalog.register_constraint(ConstraintDefinition("missing", "c1", "UNIQUE", ("id",)))
+    assert error.value.code == "UNKNOWN_TABLE"
+    with pytest.raises(MiniSQLError) as error:
+        object_catalog.register_constraint(ConstraintDefinition("t", "c1", "UNIQUE", ("missing",)))
+    assert error.value.code == "UNKNOWN_COLUMN"
 
 
 def test_dependency_blocks_drop_until_dependents_removed(dependency_tracker):

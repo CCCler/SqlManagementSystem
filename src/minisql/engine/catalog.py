@@ -8,6 +8,7 @@ import re
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import RecordStorage
 from minisql.contracts.models import ColumnSchema, DataType, TableSchema
+from minisql.storage.metadata import is_system_table
 
 # table_id=0 保留给系统表；列信息按表内顺序记录。
 SYSTEM_CATALOG = TableSchema(
@@ -83,10 +84,10 @@ class PersistentCatalog:
         return self.tables.get(name.lower())
 
     def list_tables(self) -> tuple[TableSchema, ...]:
-        """只返回用户表，不暴露系统表。"""
+        """只返回用户表，不暴露系统表（成员二约定：按 __ 前缀识别）。"""
         return tuple(
             schema for schema in self.tables.values()
-            if schema.table_id != 0 and not schema.name.startswith("__")
+            if not is_system_table(schema.name)
         )
 
     def register_table(self, schema: TableSchema) -> None:
