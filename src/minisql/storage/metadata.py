@@ -35,15 +35,17 @@ def _text(name: str) -> ColumnSchema:
 
 
 # 列顺序即记录中的物理顺序，三方不得随意调整；新增列只能追加。
+# 本模块是系统表结构的单一来源：engine/objects.py 直接引用这些常量，不得另行复制。
 # root_page 为成员二对成员三提案的必需补充：索引根页号不持久化则无法重开恢复。
 VIEWS = TableSchema("__views", (
     _int("view_id"), _text("view_name"), _text("definition"),
     _int("column_index"), _text("column_name"), _text("column_type"),
 ))
 
+# 首版触发器固定 AFTER 行级，无需 timing 列；created_order 保证同事件多触发器顺序稳定。
 TRIGGERS = TableSchema("__triggers", (
     _int("trigger_id"), _text("trigger_name"), _text("table_name"),
-    _text("event"), _text("timing"), _text("action"), _text("created_at"),
+    _text("event"), _text("action"), _int("created_order"),
 ))
 
 INDEXES = TableSchema("__indexes", (

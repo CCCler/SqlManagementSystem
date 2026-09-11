@@ -7,7 +7,9 @@ import pytest
 from minisql.contracts.errors import MiniSQLError
 from minisql.contracts.models import ColumnSchema, DataType
 from minisql.engine.database import open_database
-from minisql.engine.objects import IndexDefinition, TriggerDefinition, ViewDefinition
+from minisql.engine.objects import (
+    ConstraintDefinition, IndexDefinition, TriggerDefinition, ViewDefinition,
+)
 
 
 def test_object_tables_roundtrip_real_storage(tmp_path):
@@ -41,6 +43,76 @@ def test_object_tables_roundtrip_real_storage(tmp_path):
         assert reopened.execute("SELECT * FROM t;")[0].rows == ()
     finally:
         reopened.close()
+
+
+def test_index_root_page_persists_across_restart(tmp_path):
+    """F09：索引根页号必须持久化，重开后据此重建 B+ 树。"""
+    path = tmp_path / "db"
+    database = open_database(path)
+    database.execute("CREATE TABLE t(id INT, name VARCHAR);")
+    database.objects.register_index(
+        IndexDefinition("i1", "t", ("id", "name"), unique=True, root_page=42))
+    database.close()
+
+    reopened = open_database(path)
+    try:
+        index = reopened.objects.get_index("i1")
+        assert index.columns == ("id", "name") and index.unique is True
+        assert index.root_page == 42
+        assert reopened.objects.get_indexes("t")[0].root_page == 42
+    finally:
+        reopened.close()
+
+
+def test_constraints_persist_and_unregister(tmp_path):
+    """F07：约束定义经真实文件重开完整恢复，注销后不再出现。"""
+    path = tmp_path / "db"
+    database = open_database(path)
+    database.execute("CREATE TABLE t(id INT, name VARCHAR);")
+    database.objects.register_constraint(
+        "t", ConstraintDefinition("t", "pk_id", "PRIMARY KEY", ("id",)))
+    database.objects.register_constraint(
+        "t", ConstraintDefinition("t", "fk_ref", "FOREIGN KEY", ("name",),
+                                  reference_table="other", reference_columns=("name", "id")))
+    database.objects.register_constraint(
+        "t", ConstraintDefinition("t", "nn_name", "NOT NULL", ("name",)))
+    database.close()
+
+    reopened = open_database(path)
+    try:
+        constraints = {c.name: c for c in reopened.objects.get_constraints("T")}
+        assert set(constraints) == {"pk_id", "fk_ref", "nn_name"}
+        assert constraints["pk_id"].columns == ("id",)
+        assert constraints["pk_id"].kind == "PRIMARY KEY"
+        assert constraints["fk_ref"].reference_table == "other"
+        assert constraints["fk_ref"].reference_columns == ("name", "id")
+        assert constraints["nn_name"].columns == ("name",)
+        reopened.objects.unregister_constraint("t", "nn_name")
+    finally:
+        reopened.close()
+
+    reopened = open_database(path)
+    try:
+        assert [c.name for c in reopened.objects.get_constraints("t")] == ["fk_ref", "pk_id"]
+    finally:
+        reopened.close()
+
+
+def test_constraint_rejects_missing_table_or_column(tmp_path):
+    """约束登记校验：表或列不存在时必须报错，不写入悬空元数据。"""
+    database = open_database(tmp_path / "db")
+    try:
+        with pytest.raises(MiniSQLError) as error:
+            database.objects.register_constraint(
+                "missing", ConstraintDefinition("missing", "c1", "NOT NULL", ("id",)))
+        assert error.value.code == "UNKNOWN_TABLE"
+        database.execute("CREATE TABLE t(id INT);")
+        with pytest.raises(MiniSQLError) as error:
+            database.objects.register_constraint(
+                "t", ConstraintDefinition("t", "c2", "NOT NULL", ("nope",)))
+        assert error.value.code == "UNKNOWN_COLUMN"
+    finally:
+        database.close()
 
 
 def test_object_unregister_persists_across_restart(tmp_path):
