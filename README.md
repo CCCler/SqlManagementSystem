@@ -1,6 +1,6 @@
 # MiniSQL：大型平台软件设计实习
 
-当前状态（2026-09-09，包含 DROP TABLE、交互输入完善、删除空间回收及事务恢复）：**SQL 编译器、页式存储、执行引擎和命令行已实现，核心流程、事务、并发访问及进程崩溃恢复已通过验证。** 最近全套测试为 **367 项通过，无失败、无跳过**；报告与部分边界完善工作仍待完成。
+当前状态（2026-09-11）：**SQL 编译器、页式存储、执行引擎、命令行与图形工作台已实现；十二类 SQL 扩展（多表/聚合/子查询/集合/别名/结构变更/约束/新类型/索引/视图/触发器/权限）的编译与执行均已接通，核心流程、事务、并发、崩溃恢复及扩展功能通过验证。** 最近全套测试为 **982 项通过，无失败、无跳过**；报告与答辩材料整理仍待完成。
 
 以下命令在项目根目录执行。Python 3.11+；运行时使用标准库，pytest 用于测试。
 课程目标是贯通 SQL → Token → AST → 语义检查 → 计划 → 执行器 → 缓存/页 → 磁盘。
@@ -165,15 +165,17 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 
 - 支持 `BEGIN`、`COMMIT`、`ROLLBACK`，默认每条 SQL 自动提交；支持多个连接和进程串行访问同一数据库。
 - 支持 `CREATE TABLE`、`INSERT`、单表 `SELECT`、`DELETE`、`UPDATE`、`DROP TABLE`，以及过滤、投影、`SELECT *`、`SELECT DISTINCT` 去重、`ORDER BY` 排序和 `LIMIT`/`OFFSET` 截断分页。
-- 表列支持有符号 64 位 `INT` 和 `VARCHAR`；`BOOL` 仅用于表达式。
+- **SQL 扩展（2026-09-11 由成员三接通执行）**：多表连接（INNER/LEFT/RIGHT/CROSS）、聚合与分组（COUNT/SUM/AVG/MAX/MIN + GROUP BY/HAVING）、子查询（标量/IN/EXISTS，含相关子查询）、集合操作（UNION/UNION ALL/INTERSECT/EXCEPT）、FROM 派生表、表/列别名与计算列、视图（CREATE/DROP VIEW 与依赖保护）、触发器（AFTER 行级，NEW/OLD，递归拒绝）、约束（PRIMARY KEY/UNIQUE/NOT NULL/CHECK/DEFAULT，FOREIGN KEY 写入与父行保护）、`ALTER TABLE`（增删列/重命名/改类型，接成员二整表重写）、索引（CREATE/DROP INDEX 单列与联合、唯一索引、存量构建、增删改同步维护、索引查询计划）、用户与权限（CREATE/DROP USER、GRANT/REVOKE、登录与统一入口鉴权）。NULL 三值逻辑、DECIMAL 精确计算与动态类型字面量按编译契约执行。
+- 表列支持有符号 64 位 `INT`、`VARCHAR`、`DECIMAL(p,s)` 与日期时间类型；`BOOL` 仅用于表达式。
 - 支持加减、比较、括号及 `NOT/AND/OR`；实现常量折叠、布尔化简并保留优化前后计划。
 - 优化器对恒真 `WHERE` 消除 Filter，对恒假 `WHERE` 生成空结果计划（不扫描用户表，SELECT 保留结果列、DELETE 零影响行）。注意：事务整库前映像日志与缓存重建成本不因用户表扫描减少而降低，两者统计口径不同。
 - 支持只读 `EXPLAIN`，仅渲染优化后计划树、不扫描或修改数据；运行时加减检查有符号 64 位越界并报 `INTEGER_OUT_OF_RANGE`。
 - 表名、列名和关键字大小写不敏感；字符串使用单引号，两个连续单引号表示一个单引号。
-- SQL 必须以分号结束；`INSERT` 必须列出全部列，允许重排。支持 `--` 和非嵌套 `/* */` 注释。
+- SQL 必须以分号结束；单行 `INSERT` 必须列出全部列，允许重排。支持 `--` 和非嵌套 `/* */` 注释。
 - 使用 4KB 页、LRU/FIFO 缓存、脏页写回；表结构和记录持久化，支持正常重启及写前回滚日志恢复。
 - DELETE 后自动整理页内记录并回收空间，插入优先复用空槽和空闲空间；存活记录的 RecordId 保持不变。空页留给同表复用，数据库文件不主动缩小；DROP TABLE 才释放整表页供其他表复用。
-- 不支持 `JOIN`、`GROUP BY`、`NULL`、浮点数和 `VARCHAR(n)`；索引尚未实现。事务采用整库独占锁与完整文件前映像日志，不支持行锁、MVCC、嵌套事务或保存点。
+- 鉴权采用"初始化模式"：库中无账户时不强制；创建首个账户后自动成为管理员，此后所有 SQL 需先登录（CLI 用 `--user/--password`）。运行时新错误码：NOT_NULL_VIOLATION、DUPLICATE_KEY、CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN；`ALTER USER` 仍为待接入项。
+- 事务采用整库独占锁与完整文件前映像日志，不支持行锁、MVCC、嵌套事务或保存点。
 
 待办包括报告复核、测试截图和答辩材料整理。
 

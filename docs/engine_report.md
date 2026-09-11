@@ -164,3 +164,34 @@ id | name
 编译器、页式存储联调后 362 项测试全绿、零跳过，core.sql 端到端演示、六类错误诊断、
 关闭重启持久化、事务回滚、删表页复用及异常 I/O 资源释放均验收通过，满足建表→插入→
 查询→删除→再查→关闭→重开查询以及事务与恢复扩展的综合验收要求。
+
+## 7. SQL 扩展执行接入（2026-09-11，成员三）
+
+十二类扩展的编译侧由成员一交付后，执行侧按下述结构接通（`engine/expr.py`、
+`engine/write_path.py`、`engine/objects.py` 与执行器扩展分支）：
+
+**查询执行**：扩展表达式求值器（三值 NULL 逻辑、精确 DECIMAL 与 HALF_EVEN 除法、
+INT 64 位溢出、除零报错、LIKE/ESCAPE、BETWEEN、IN）；算子接通
+TableScan/IndexScan/Filter/ExpressionProject/Sort/Limit/Distinct/Aggregate/Having/
+Join（四类）/SetOperation/DerivedTable/ViewScan；来源绑定按 FieldBinding 的
+(限定名, 列名, 序号) 与扫描叶子对齐（自连接靠别名、多来源用游标逐个分配）；
+聚合后表达式按 expr_key 映射取值；相关子查询经行上下文链回溯外层绑定；
+NULL 排序遵循 ASC NULL LAST / DESC NULL FIRST。
+
+**写路径**：约束检查（NOT NULL / 主键与 UNIQUE（含 NULL 语义）/ CHECK 仅 FALSE 违规 /
+外键 MATCH SIMPLE 与父行引用保护）；索引同步维护（增删改、唯一索引查重、B+ 树分裂
+后 root_page 回写）与存量构建；ALTER TABLE 接成员二整表重写（ADD 补默认值、DROP、
+RENAME、类型变更、索引重建）；触发器 AFTER 行级调度（定义持久化 + 重载视图重编译 +
+活动栈递归拒绝 + 失败随语句回滚）。
+
+**目录与鉴权**：ExtendedCatalogAdapter 把持久化对象翻译为编译器契约
+（视图/索引/触发器/账户/依赖；约束与 NOT NULL/DEFAULT 回填表结构）；
+统一入口鉴权（按操作符收集表级权限，视图与子查询按调用者权限展开，
+撤权即时生效，初始化模式兼容既有库）。
+
+**新运行时错误码**（需组内周知）：NOT_NULL_VIOLATION、DUPLICATE_KEY、
+CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、
+SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN、INVALID_CONSTRAINT。
+
+**验收**：扩展查询/DDL/触发器/鉴权共 40 余项专项测试；全套 982 项通过、零跳过。
+未接入项：`ALTER USER`（重设密码）仍受 FEATURE_NOT_EXECUTABLE 屏障。
