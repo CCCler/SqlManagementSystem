@@ -75,14 +75,11 @@ class PersistentCatalog:
         }
 
     def get_table(self, name: str) -> TableSchema | None:
-        """公开查找：不暴露 "__" 前缀的系统表（编译器与 SQL 不可见）。"""
-        key = name.lower()
-        if key.startswith("__"):
-            return None
-        return self.tables.get(key)
+        """按名字查找，含登记在 __catalog 中的系统表（迁移工具等需要）。"""
+        return self.tables.get(name.lower())
 
     def _resolve_internal(self, name: str) -> TableSchema | None:
-        """内部查找：含对象系统表（PersistentObjectCatalog/账户存储使用）。"""
+        """对象系统表解析入口；与 get_table 同源，语义上仅供引擎内部使用。"""
         return self.tables.get(name.lower())
 
     def list_tables(self) -> tuple[TableSchema, ...]:
