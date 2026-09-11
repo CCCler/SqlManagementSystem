@@ -17,6 +17,7 @@ from minisql.engine.database import open_database
 from minisql.engine.migrate import detect_format_version, migrate
 from minisql.storage.buffer import PageBufferPool
 from minisql.storage.file_manager import FileManager
+from minisql.storage import metadata
 from minisql.storage.page import (
     FORMAT_VERSION_V1, FORMAT_VERSION_V2, DiskPageManager, write_format_version,
 )
@@ -141,6 +142,33 @@ def test_apply_preserves_table_ids(tmp_path):
     finally:
         db.close()
     assert ids == {"a": 1, "c": 3}
+
+
+def test_apply_preserves_system_tables(tmp_path):
+    """方案 B 下系统表与用户表同存 __catalog，迁移必须一并重建而非丢弃。"""
+    index_row = (1, "idx_t_id", "t", 1, 0, "id", 5)  # 含 root_page 列。
+    build_v1(tmp_path, [
+        ("t", [INT], [(1,)]),
+        ("__indexes", metadata.INDEXES.columns, [index_row]),
+    ])
+
+    report = migrate(tmp_path, apply=True)
+
+    assert report.tables == 2  # 用户表 + 系统表一并统计。
+    pages = DiskPageManager(FileManager(tmp_path / DB))
+    try:
+        storage = HeapStorage(pages, PageBufferPool(pages))
+        catalog = PersistentCatalog(storage)
+        catalog.bootstrap()
+        schema = catalog.get_table("__indexes")
+        assert schema is not None and schema.table_id == 2
+        assert [column.name for column in schema.columns] == [
+            "index_id", "index_name", "table_name", "unique_flag",
+            "column_index", "column_name", "root_page"]
+        assert [record.row for record in storage.scan(schema)] == [index_row]
+        assert catalog.get_table("t") is not None
+    finally:
+        pages.close()
 
 
 def test_refuses_pending_journal_without_touching_file(tmp_path):

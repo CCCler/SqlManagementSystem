@@ -6,6 +6,8 @@
 - 原子性：在临时文件中按 V2 重建全部用户表与 ``__catalog``，fsync 后用
   ``durable_replace`` 原子替换 ``minisql.db``；迁移中断时原库文件完好，可安全重跑。
 - 保留 table_id：源表编号原样复制到新文件，避免上层元数据（如未来索引登记）失效。
+- 保留系统表：方案 B 下 ``__views``/``__indexes``/``__users`` 等系统表与用户表同存
+  ``__catalog``，一并重建，避免视图/索引/账户元数据在迁移后丢失。
 - 版本识别：读页 0 页头 reserved 字节，历史文件的 0 归一化为 V1；已是 V2 时不动作。
 
 本模块复用 ``PersistentCatalog`` 枚举表结构，因此位于 engine 层（engine 依赖
@@ -134,21 +136,31 @@ def _open_storage(database: Path):
         pages.close()
 
 
+def _object_schemas(catalog: PersistentCatalog) -> list[TableSchema]:
+    """枚举需迁移的全部对象表：用户表 + 已登记的系统表。
+
+    不能直接用 ``list_tables()``——按契约它只返回用户表，会漏掉系统表，
+    导致视图/索引/账户元数据迁移后丢失。``__catalog``（table_id=0）由
+    ``bootstrap`` 在目标库自动重建，不在此列。
+    """
+    return [schema for schema in catalog.tables.values() if schema.table_id != 0]
+
+
 def _survey(database: Path) -> tuple[int, int]:
     with _open_storage(database) as storage:
         catalog = PersistentCatalog(storage)
         catalog.bootstrap()
-        schemas = catalog.list_tables()
+        schemas = _object_schemas(catalog)
         rows = sum(1 for schema in schemas for _ in storage.scan(schema))
     return len(schemas), rows
 
 
 def _rebuild(source: Path, dest: Path) -> tuple[int, int]:
-    """把 source 的全部用户表与目录按当前版本格式重建到 dest，返回 (表数, 行数)。"""
+    """把 source 的全部对象表（用户表 + 系统表）与目录重建到 dest，返回 (表数, 行数)。"""
     with _open_storage(source) as src_storage:
         src_catalog = PersistentCatalog(src_storage)
         src_catalog.bootstrap()
-        schemas = sorted(src_catalog.list_tables(), key=lambda s: s.table_id)
+        schemas = sorted(_object_schemas(src_catalog), key=lambda s: s.table_id)
 
         with _open_storage(dest) as dest_storage:
             dest_catalog = PersistentCatalog(dest_storage)
