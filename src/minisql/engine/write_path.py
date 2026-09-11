@@ -436,7 +436,10 @@ class WritePathMixin:
                 active.discard(trigger.name)
 
     def _run_trigger_action(self, action, context):
-        """执行一个触发器动作；SELECT 动作按约定丢弃结果。"""
+        """执行一个触发器动作；SELECT 动作按约定丢弃结果。
+
+        触发器按调用者权限执行（契约）：动作涉及的表同样走统一权限检查。"""
+        self._enforce_plan_permissions(action)
         operator = action.operator
         if operator == "Insert":
             self._extended_insert(action, context)

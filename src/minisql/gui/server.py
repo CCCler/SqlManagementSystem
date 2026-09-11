@@ -124,7 +124,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请求必须是 JSON 对象")
             action = self.path.removeprefix("/api/")
             if self.path != "/api/" + action or action not in (
-                    "session", "connect", "state", "execute", "disconnect", "close"):
+                    "session", "connect", "state", "execute", "disconnect", "close",
+                    "login", "logout"):
                 self.reply(404, {"error": "接口不存在"})
                 return
             if action == "session":

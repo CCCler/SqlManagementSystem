@@ -5,7 +5,7 @@ import threading
 import time
 
 from minisql.cli.trace import to_json_value
-from minisql.contracts.errors import MiniSQLError
+from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.engine.database import open_database
 
 
@@ -66,6 +66,7 @@ class Session:
 
     def state(self):
         return {"connected": self.db is not None, "directory": str(self.path),
+                "user": (self.db.session.account if self.db and self.db.session else None),
                 "tables": to_json_value(self.db.catalog.list_tables()) if self.db else [],
                 "in_transaction": bool(self.db and self.db.in_transaction),
                 "transaction_failed": self.failed}
@@ -95,6 +96,19 @@ class Session:
                     raise
                 self.db, self.path = candidate, path
                 self.db.compiler = CaptureCompiler(self.db.compiler)
+            elif action == "login":
+                if not self.db:
+                    raise ValueError("请先连接数据库")
+                user = body.get("user")
+                if not isinstance(user, str) or not user.strip():
+                    raise ValueError("请输入账户名")
+                password = body.get("password")
+                if not self.db.login(user, password if isinstance(password, str) else ""):
+                    raise MiniSQLError(ErrorStage.EXECUTION, "LOGIN_FAILED",
+                                       "登录失败：账户不存在或密码错误")
+            elif action == "logout":
+                if self.db:
+                    self.db.logout()
             elif action == "disconnect":
                 self._disconnect()
             elif action == "state":

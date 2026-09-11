@@ -174,7 +174,7 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 - SQL 必须以分号结束；单行 `INSERT` 必须列出全部列，允许重排。支持 `--` 和非嵌套 `/* */` 注释。
 - 使用 4KB 页、LRU/FIFO 缓存、脏页写回；表结构和记录持久化，支持正常重启及写前回滚日志恢复。
 - DELETE 后自动整理页内记录并回收空间，插入优先复用空槽和空闲空间；存活记录的 RecordId 保持不变。空页留给同表复用，数据库文件不主动缩小；DROP TABLE 才释放整表页供其他表复用。
-- 鉴权采用"初始化模式"：库中无账户时不强制；创建首个账户后自动成为管理员，此后所有 SQL 需先登录（CLI 用 `--user/--password`）。运行时新错误码：NOT_NULL_VIOLATION、DUPLICATE_KEY、CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN；`ALTER USER` 仍为待接入项。
+- 鉴权采用"初始化模式"：库中无账户时不强制；创建首个账户后自动成为管理员，此后所有 SQL 需先登录（CLI 用 `--user/--password`，图形工作台右上角「登录」按钮）。运行时新错误码：NOT_NULL_VIOLATION、DUPLICATE_KEY、CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN、LOGIN_FAILED；`ALTER USER` 仍为待接入项。
 - 事务采用整库独占锁与完整文件前映像日志，不支持行锁、MVCC、嵌套事务或保存点。
 
 待办包括报告复核、测试截图和答辩材料整理。

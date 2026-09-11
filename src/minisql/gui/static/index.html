@@ -26,7 +26,7 @@
 <header class="global-header">
   <a class="brand" href="/" aria-label="MiniSQL 首页"><img src="/favicon.svg" width="32" height="32" alt=""><strong>MiniSQL</strong></a>
   <span class="header-divider">/</span><span class="project-title">数据库实验工作台</span><span class="badge">Local</span>
-  <div class="header-right"><span id="connection-status" class="connection-status">正在连接…</span><button id="connection-button" class="button small">管理连接</button></div>
+  <div class="header-right"><span id="connection-status" class="connection-status">正在连接…</span><button id="login-button" class="button small">登录</button><button id="connection-button" class="button small">管理连接</button></div>
 </header>
 <section class="repo-header">
   <div class="repo-title"><svg class="icon"><use href="#i-db"/></svg><span>workspace</span><span class="muted">/</span><strong id="database-name">gui</strong><span class="badge">本地数据库</span></div>
@@ -88,6 +88,7 @@
   </main>
 </div>
 <footer class="statusbar"><span class="status-brand"><svg class="icon"><use href="#i-db"/></svg>MiniSQL <span class="muted">/</span> 实验工作台</span><span id="directory-status" title="数据库目录">等待连接</span><span>SQL → Pages → Disk</span></footer>
+<dialog id="login-dialog"><form id="login-form"><div class="dialog-header"><h2>登录</h2><button type="button" id="close-login" class="icon-button" aria-label="关闭登录窗口">×</button></div><p class="muted">数据库已有账户时必须登录后才能执行 SQL。</p><label for="login-user">账户</label><input id="login-user" required autocomplete="username"><label for="login-password">密码</label><input id="login-password" type="password" required autocomplete="current-password"><p id="login-error" class="error-text" role="alert"></p><div class="dialog-actions"><button type="submit" class="button primary">登录</button></div></form></dialog>
 <dialog id="connection-dialog"><form id="connection-form"><div class="dialog-header"><h2>管理数据库连接</h2><button type="button" id="close-dialog" class="icon-button" aria-label="关闭连接窗口">×</button></div><p class="muted">连接本机上的 MiniSQL 数据库目录。</p><label for="directory-input">数据库目录</label><input id="directory-input" required autocomplete="off"><p class="field-hint">相对路径以服务启动目录为基准。新目录会自动创建。</p><p id="dialog-error" class="error-text" role="alert"></p><div class="dialog-actions"><button type="button" id="disconnect" class="button danger">断开连接</button><button type="submit" id="connect" class="button primary">连接数据库</button></div></form></dialog>
 </body>
 </html>

@@ -193,3 +193,32 @@ def test_idle_cleanup_rolls_back(server):
         assert run(other, "SELECT * FROM t;")["results"][0]["rows"] == []
     finally:
         other.close()
+
+
+def test_gui_login_flow(session):
+    """GUI 登录：初始化模式→首个管理员→未登录拒绝→登录/退出。"""
+    assert run(session, "CREATE TABLE t(id INT); INSERT INTO t(id) VALUES (1);")["ok"]
+    assert session.submit("execute", {"sql": "CREATE USER admin IDENTIFIED BY 'rootpw';"}).result()["ok"]
+    data = run(session, "SELECT * FROM t;")            # 已有账户：未登录被拒
+    assert not data["ok"] and data["error"]["code"] == "NOT_LOGGED_IN"
+    data = session.submit("login", {"user": "admin", "password": "bad"}).result()
+    assert not data["ok"] and "登录失败" in data["error"]["reason"]
+    data = session.submit("login", {"user": "admin", "password": "rootpw"}).result()
+    assert data["ok"] and data["user"] == "admin"
+    assert run(session, "SELECT * FROM t;")["results"][0]["rows"] == [[1]]
+    data = session.submit("logout", {}).result()
+    assert data["ok"] and data["user"] is None
+    assert run(session, "SELECT * FROM t;")["error"]["code"] == "NOT_LOGGED_IN"
+
+
+def test_http_login_action(server):
+    key = request(server, "/api/session", {})[1]["session"]
+    request(server, "/api/connect", {"session": key})
+    request(server, "/api/execute", {"session": key,
+                                     "sql": "CREATE TABLE t(id INT); CREATE USER admin IDENTIFIED BY 'rootpw';"})
+    code, body = request(server, "/api/login", {"session": key, "user": "admin", "password": "wrong"})
+    assert code == 200 and not body["ok"]
+    code, body = request(server, "/api/login", {"session": key, "user": "admin", "password": "rootpw"})
+    assert code == 200 and body["ok"] and body["user"] == "admin"
+    assert request(server, "/api/execute", {"session": key, "sql": "INSERT INTO t(id) VALUES (5);"})[1]["ok"]
+    assert request(server, "/api/logout", {"session": key})[1]["user"] is None

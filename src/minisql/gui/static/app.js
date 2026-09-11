@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const editor = $('sql-editor');
 const model = {token: '', session: '', connected: false, in_transaction: false,
-  transaction_failed: false, tables: [], busy: false, compilations: [], cache: null};
+  transaction_failed: false, user: null, tables: [], busy: false, compilations: [], cache: null};
 const example = `-- 入门实验：创建数据表，插入 52 条记录，再执行条件查询与分页。
 -- 示例仅填入编辑器，点击「运行全部」后才执行。
 -- 数据共 52 条，可在「浏览」页签点击 experiments 验证翻页（每页 10 行）。
@@ -103,6 +103,7 @@ function controls() {
   $('commit').disabled = unavailable || !model.in_transaction || model.transaction_failed;
   $('rollback').disabled = unavailable || !model.in_transaction;
   ['connect', 'connection-button', 'load-example', 'open-file'].forEach(id => { $(id).disabled = model.busy; });
+  $('login-button').disabled = !model.connected || model.busy;
   $('disconnect').disabled = unavailable;
   editor.readOnly = model.busy;
   document.querySelectorAll('.table-query').forEach(button => { button.disabled = model.busy; });
@@ -131,9 +132,10 @@ async function task(work) {
   finally { model.busy = false; controls(); }
 }
 function setState(data) {
-  for (const key of ['connected', 'directory', 'tables', 'in_transaction', 'transaction_failed']) {
+  for (const key of ['connected', 'directory', 'user', 'tables', 'in_transaction', 'transaction_failed']) {
     if (key in data) model[key] = data[key];
   }
+  $('login-button').textContent = model.user ? ('退出 · ' + model.user) : '登录';
   $('database-name').textContent = (model.directory || 'gui').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   $('directory-status').textContent = model.directory || '未连接';
   $('directory-status').title = model.directory || '';
@@ -475,6 +477,25 @@ $('connection-form').onsubmit = event => {
       await connect($('directory-input').value);
     } catch (error) { $('dialog-error').textContent = error.message; throw error; }
   });
+};
+$('login-button').onclick = () => {
+  if (model.user) {
+    task(async () => { const data = await api('logout'); setState(data); notice('已退出登录。'); });
+    return;
+  }
+  $('login-error').textContent = '';
+  $('login-form').reset();
+  $('login-dialog').showModal();
+};
+$('close-login').onclick = () => $('login-dialog').close();
+$('login-form').onsubmit = (event) => {
+  event.preventDefault();
+  if (model.busy) return;
+  model.busy = true; controls();
+  api('login', {user: $('login-user').value, password: $('login-password').value})
+    .then(data => { $('login-dialog').close(); setState(data); notice('已登录：' + data.user + '。'); })
+    .catch(error => { $('login-error').textContent = error.message; })
+    .finally(() => { model.busy = false; controls(); });
 };
 $('disconnect').onclick = () => {
   if (model.in_transaction && !confirm('断开连接将回滚当前未提交事务，是否继续？')) return;
