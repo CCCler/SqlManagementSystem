@@ -11,7 +11,9 @@ from minisql.contracts.interfaces import CatalogWriter, Compiler, Executor, Reco
 from minisql.contracts.models import ExecutionResult
 from minisql.engine.catalog import PersistentCatalog
 from minisql.engine.executor import PlanExecutor
-from minisql.engine.objects import PersistentAccountStore, PersistentObjectCatalog
+from minisql.engine.objects import (
+    ExtendedCatalogAdapter, PersistentAccountStore, PersistentObjectCatalog,
+)
 from minisql.storage.buffer import PageBufferPool
 from minisql.storage.file_manager import FileManager
 from minisql.storage.page import DiskPageManager
@@ -25,12 +27,13 @@ class Database:
         self.executor = executor
         self.catalog = catalog
         self.storage = storage
+        self.catalog_view = catalog  # 事务型数据库会用对象目录适配器替换
 
     def execute(self, sql: str) -> list[ExecutionResult]:
         """按语句编译、执行、刷新；遇错停止，之前成功操作保持有效，不返回部分结果。"""
         results: list[ExecutionResult] = []
         for statement in self.compiler.split_statements(sql):
-            compiled = self.compiler.compile(statement, self.catalog)
+            compiled = self.compiler.compile(statement, self.catalog_view)
             results.append(self.executor.execute(compiled.optimized_plan))
             self.storage.flush()
         return results
@@ -89,6 +92,7 @@ class TransactionalDatabase(Database):
         self.accounts = PersistentAccountStore(self.storage, self.catalog)
         self.objects.bootstrap()
         self.accounts.bootstrap()
+        self.catalog_view = ExtendedCatalogAdapter(self.catalog, self.objects, self.accounts)
 
     def _close_file(self):
         if self._files is not None:
@@ -155,7 +159,7 @@ class TransactionalDatabase(Database):
         tokens = Lexer().tokenize(statement)
         control = tokens[0].type is TokenType.KEYWORD and tokens[0].lexeme.upper() in ("BEGIN", "COMMIT", "ROLLBACK")
         if control:
-            action = self.compiler.compile(statement, self.catalog).plan.action
+            action = self.compiler.compile(statement, self.catalog_view).plan.action
             if action == "ROLLBACK":
                 if not self._active:
                     raise _transaction_error("NO_TRANSACTION", "当前没有事务")
@@ -179,7 +183,7 @@ class TransactionalDatabase(Database):
         if automatic:
             self._start()
         try:
-            compiled = self.compiler.compile(statement, self.catalog)
+            compiled = self.compiler.compile(statement, self.catalog_view)
             result = self.executor.execute(compiled.optimized_plan)
             if automatic:
                 self._commit_locked()

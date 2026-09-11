@@ -11,10 +11,15 @@ from minisql.contracts.plans import (
     Update, CreateTable, Delete, DropTable, EmptyScan, Explain, Filter, Insert, Plan, Project,
     QueryPlan, SeqScan, TransactionControl,
 )
-from minisql.engine.expr import Row as RuntimeRow, RowContext, boolean_values, evaluate, expr_key
+from minisql.engine.expr import (
+    Row as RuntimeRow, RowContext, aggregate_value, boolean_values, evaluate, expr_key,
+)
 
-# 阶段 A 已接入执行器的扩展查询算子；其余算子报 FEATURE_NOT_EXECUTABLE。
-EXTENDED_QUERY_OPERATORS = ("TableScan", "Filter", "ExpressionProject", "Sort", "Limit", "Distinct")
+# 阶段 A/B 已接入执行器的扩展查询算子；其余算子报 FEATURE_NOT_EXECUTABLE。
+EXTENDED_QUERY_OPERATORS = (
+    "TableScan", "Filter", "ExpressionProject", "Sort", "Limit", "Distinct",
+    "Aggregate", "Having", "Join", "SetOperation", "DerivedTable", "ViewScan",
+)
 
 INT_MIN = -(2 ** 63)
 INT_MAX = 2 ** 63 - 1
@@ -40,15 +45,15 @@ def _query_columns(plan: QueryPlan) -> tuple[str, ...]:
     raise _execution_error("UNKNOWN_PLAN", f"未知查询计划: {type(plan).__name__}")
 
 
-def _collect_binding_keys(plan) -> list:
-    """收集计划表达式引用的全部 (scope, source) 绑定键（不进入子查询计划）。"""
+def _collect_bindings(plan) -> dict:
+    """收集计划表达式引用的绑定键 → FieldBinding（每键取首个，不进入子查询计划）。"""
     from minisql.contracts.extensions import Expr, ExtendedPlan
-    keys: set = set()
+    bindings: dict = {}
 
     def visit_expr(expression):
         binding = getattr(expression, "binding", None)
         if binding is not None:
-            keys.add((binding.scope, binding.source))
+            bindings.setdefault((binding.scope, binding.source), binding)
         for arg in expression.args:
             if isinstance(arg, Expr):
                 visit_expr(arg)
@@ -74,7 +79,48 @@ def _collect_binding_keys(plan) -> list:
                 visit_plan(child)
 
     visit_plan(plan)
-    return sorted(keys)
+    return bindings
+
+
+class _ScanCursor:
+    """按叶子出现顺序分发 (绑定键, 列数)；Join 两侧据此识别各自的来源。"""
+
+    __slots__ = ("assignments", "index")
+
+    def __init__(self, assignments):
+        self.assignments = assignments
+        self.index = 0
+
+    def take(self):
+        item = self.assignments[self.index] if self.index < len(self.assignments) else (None, 0)
+        self.index += 1
+        return item
+
+
+def _dedupe(values: list) -> list:
+    """保序去重；NULL 与 NULL 视为相同（集合语义与分组一致）。"""
+    seen: set = set()
+    unique = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    return unique
+
+
+def _source_nodes(plan) -> list:
+    """按左到右深度优先列出来源节点（TableScan/DerivedTable/ViewScan）。
+
+    DerivedTable/ViewScan 视作本查询块的来源叶子，其内部是独立查询块，
+    执行时另外分配绑定键。"""
+    from minisql.contracts.extensions import ExtendedPlan
+    if plan.operator in ("TableScan", "DerivedTable", "ViewScan"):
+        return [plan]
+    nodes = []
+    for child in plan.children:
+        if isinstance(child, ExtendedPlan):
+            nodes.extend(_source_nodes(child))
+    return nodes
 
 
 def _scan_leaves(plan) -> list:
@@ -87,16 +133,6 @@ def _scan_leaves(plan) -> list:
         if isinstance(child, ExtendedPlan):
             leaves.extend(_scan_leaves(child))
     return leaves
-
-
-def _plan_scan_key(plan):
-    """阶段 A 只支持单来源：一个扫描叶子对应唯一绑定键；多来源整体拒绝。"""
-    keys = _collect_binding_keys(plan)
-    leaves = _scan_leaves(plan)
-    if len(leaves) > 1 or len(keys) > 1:
-        raise _execution_error(
-            "FEATURE_NOT_EXECUTABLE", "多来源（JOIN/子查询/视图展开）的执行尚未接入（阶段 B）")
-    return keys[0] if keys else None
 
 
 def _sort_pass(rows, expression, descending, outer, output_keys):
@@ -214,15 +250,53 @@ class PlanExecutor:
         if plan.operator not in EXTENDED_QUERY_OPERATORS:
             raise _execution_error("FEATURE_NOT_EXECUTABLE",
                                    f"扩展算子 {plan.operator} 的执行尚未接入")
-        scan_key = _plan_scan_key(plan)
-        rows, output, _ = self._extended_node(plan, None, scan_key)
+        cursor = _ScanCursor(self._scan_assignments(plan))
+        rows, output, _ = self._extended_node(plan, None, cursor)
         result_rows = tuple(
             row.output if row.output is not None else tuple(next(iter(row.values.values()), ()))
             for row in rows
         )
         return ExecutionResult(columns=tuple(field.name for field in output), rows=result_rows)
 
-    def _extended_node(self, plan, outer, scan_key):
+    def _scan_assignments(self, plan):
+        """按叶子顺序为每个来源叶子匹配 (scope, source) 绑定键。
+
+        以 FieldBinding 的限定名 + 列名 + 序号三元组对准来源表结构（自连接靠
+        别名区分）；无歧义时可退化按列名与序号匹配。未匹配的绑定属于外层
+        作用域（相关子查询），由运行期上下文链回溯解析。"""
+        bindings = _collect_bindings(plan)
+        assignments = []
+        used: set = set()
+        for source in _source_nodes(plan):
+            attributes = dict(source.attributes)
+            if source.operator == "TableScan":
+                table_name = attributes["table"]
+                alias = (attributes.get("alias") or table_name).lower()
+                schema = self.catalog.get_table(table_name)
+                names = [column.name for column in schema.columns] if schema is not None else []
+            else:  # DerivedTable / ViewScan：本查询块的来源，其内部是独立查询块
+                alias = (attributes.get("alias") or attributes.get("view") or "").lower()
+                names = [field.name for field in source.output]
+            key = None
+            for candidate, binding in bindings.items():
+                if (candidate in used or binding.ordinal >= len(names)
+                        or names[binding.ordinal] != binding.name):
+                    continue
+                if (binding.qualifier or "").lower() == alias:
+                    key = candidate
+                    break
+            if key is None:
+                candidates = [candidate for candidate, binding in bindings.items()
+                              if candidate not in used and binding.ordinal < len(names)
+                              and names[binding.ordinal] == binding.name]
+                if len(candidates) == 1:
+                    key = candidates[0]
+            if key is not None:
+                used.add(key)
+            assignments.append((key, len(names)))
+        return assignments
+
+    def _extended_node(self, plan, outer, cursor):
         """递归执行一个扩展算子，返回 (rows, output, output_keys)。"""
         from minisql.contracts.extensions import ExtendedPlan
         operator = plan.operator
@@ -231,30 +305,49 @@ class PlanExecutor:
             schema = self.catalog.get_table(attributes["table"])
             if schema is None:
                 raise _execution_error("UNKNOWN_TABLE", attributes["table"])
-            values_key = (scan_key[0], scan_key[1]) if scan_key else None
+            values_key, _ = cursor.take()
             rows = [
                 RuntimeRow({values_key: tuple(record.row)} if values_key else {})
                 for record in self.storage.scan(schema)
             ]
             return rows, plan.output, []
-        if operator not in ("Filter", "ExpressionProject", "Sort", "Limit", "Distinct"):
+        if operator == "Join":
+            return self._join_rows(plan, outer, cursor)
+        if operator in ("DerivedTable", "ViewScan"):
+            values_key, _ = cursor.take()
+            child = plan.children[0]
+            sub_cursor = _ScanCursor(self._scan_assignments(child))
+            rows, _, _ = self._extended_node(child, None, sub_cursor)
+            rebound = []
+            for row in rows:
+                output = row.output if row.output is not None else ()
+                rebound.append(RuntimeRow({values_key: output} if values_key else {}, output))
+            return rebound, plan.output, []
+        if operator == "SetOperation":
+            return self._set_operation_rows(plan, outer, cursor)
+        if operator not in ("Filter", "Having", "ExpressionProject", "Sort", "Limit",
+                            "Distinct", "Aggregate"):
             raise _execution_error("FEATURE_NOT_EXECUTABLE",
                                    f"扩展算子 {operator} 的执行尚未接入")
         child = plan.children[0]
         if not isinstance(child, ExtendedPlan):
             raise _execution_error("FEATURE_NOT_EXECUTABLE", "扩展算子缺少子计划")
-        rows, output, output_keys = self._extended_node(child, outer, scan_key)
-        if operator == "Filter":
+        rows, output, output_keys = self._extended_node(child, outer, cursor)
+        if operator in ("Filter", "Having"):
             predicate = plan.expressions[0]
-            rows = [row for row in rows if evaluate(predicate, RowContext(row, outer)) is True]
+            rows = [row for row in rows
+                    if evaluate(predicate, self._row_context(row, outer, output_keys)) is True]
             return rows, output, output_keys
+        if operator == "Aggregate":
+            return self._aggregate_rows(plan, rows, outer)
         if operator == "ExpressionProject":
             items = plan.expressions
-            output_keys = [expr_key(item) for item in items]
+            child_keys = output_keys
+            new_keys = [expr_key(item) for item in items]
             for row in rows:
-                context = RowContext(row, outer)
+                context = self._row_context(row, outer, child_keys)
                 row.output = tuple(evaluate(item, context) for item in items)
-            return rows, plan.output, output_keys
+            return rows, plan.output, new_keys
         if operator == "Sort":
             return self._sort_rows(plan, rows, outer, output_keys), output, output_keys
         if operator == "Limit":
@@ -270,6 +363,124 @@ class PlanExecutor:
                 seen.add(row.output)
                 unique.append(row)
         return unique, output, output_keys
+
+    def _join_rows(self, plan, outer, cursor):
+        """四类连接：INNER/CROSS 笛卡尔积过滤；LEFT/RIGHT 缺失侧补 NULL。"""
+        kind = (dict(plan.attributes).get("kind") or "INNER").upper()
+        left_plan, right_plan = plan.children[0], plan.children[1]
+        left_start = cursor.index
+        left_rows, output, _ = self._extended_node(left_plan, outer, cursor)
+        right_start = cursor.index
+        right_rows, _, _ = self._extended_node(right_plan, outer, cursor)
+        left_bindings = cursor.assignments[left_start:right_start]
+        right_bindings = cursor.assignments[right_start:cursor.index]
+
+        def merge(left_row, right_row):
+            values = dict(left_row.values)
+            values.update(right_row.values)
+            return RuntimeRow(values)
+
+        def matched(left_row, right_row):
+            if not plan.expressions:  # CROSS：无 ON
+                return True
+            return evaluate(plan.expressions[0],
+                            self._row_context(merge(left_row, right_row), outer, [])) is True
+
+        result = []
+        if kind == "RIGHT":
+            null_left = {key: (None,) * size for key, size in left_bindings if key}
+            for right_row in right_rows:
+                found = False
+                for left_row in left_rows:
+                    if matched(left_row, right_row):
+                        result.append(merge(left_row, right_row))
+                        found = True
+                if not found:
+                    values = dict(null_left)
+                    values.update(right_row.values)
+                    result.append(RuntimeRow(values))
+        else:
+            null_right = {key: (None,) * size for key, size in right_bindings if key}
+            for left_row in left_rows:
+                found = False
+                for right_row in right_rows:
+                    if matched(left_row, right_row):
+                        result.append(merge(left_row, right_row))
+                        found = True
+                if kind == "LEFT" and not found:
+                    values = dict(left_row.values)
+                    values.update(null_right)
+                    result.append(RuntimeRow(values))
+        return result, output, []
+
+    def _set_operation_rows(self, plan, outer, cursor):
+        """集合操作：UNION 去重、UNION ALL 保序全留、INTERSECT/EXCEPT 集合语义。"""
+        kind = (dict(plan.attributes).get("kind") or "").upper()
+        left_rows, output, _ = self._extended_node(plan.children[0], outer, cursor)
+        right_rows, _, _ = self._extended_node(plan.children[1], outer, cursor)
+
+        def values_of(row):
+            return row.output if row.output is not None else tuple(next(iter(row.values.values()), ()))
+
+        left_values = [values_of(row) for row in left_rows]
+        right_values = [values_of(row) for row in right_rows]
+        right_set = set(right_values)
+        if kind == "UNION ALL":
+            combined = left_values + right_values
+        elif kind == "UNION":
+            combined = _dedupe(left_values + right_values)
+        elif kind == "INTERSECT":
+            combined = _dedupe([value for value in left_values if value in right_set])
+        elif kind == "EXCEPT":
+            combined = _dedupe([value for value in left_values if value not in right_set])
+        else:
+            raise _execution_error("FEATURE_NOT_EXECUTABLE", f"集合操作 {kind} 的执行尚未接入")
+        return [RuntimeRow(output=value) for value in combined], plan.output, []
+
+    def _run_subquery_values(self, plan, context):
+        """子查询执行器：以给定上下文为外层，返回投影值元组列表（相关绑定回溯）。"""
+        cursor = _ScanCursor(self._scan_assignments(plan))
+        rows, _, _ = self._extended_node(plan, context, cursor)
+        return [
+            row.output if row.output is not None else tuple(next(iter(row.values.values()), ()))
+            for row in rows
+        ]
+
+    def _row_context(self, row, outer, output_keys):
+        """构造求值上下文：投影后的行按 expr_key 取已算好的投影/聚合值。"""
+        mapped = None
+        if row.output is not None and output_keys:
+            mapped = {key: value for key, value in zip(output_keys, row.output)}
+        runner = outer.runner if outer is not None and outer.runner is not None else self._run_subquery_values
+        return RowContext(row, outer, mapped, runner)
+
+    def _aggregate_rows(self, plan, rows, outer):
+        """分组聚合：groups 为零时全部行为一组（空输入产出 COUNT=0 行）。
+
+        聚合清单取 attrs['aggregates']（编译器显式给出）；plan.expressions 中
+        分组键之后的其余项是投影表达式，不在此求值。"""
+        attributes = dict(plan.attributes)
+        group_count = attributes.get("group_count") or 0
+        group_exprs = plan.expressions[:group_count]
+        aggregate_exprs = tuple(attributes.get("aggregates") or (
+            expression for expression in plan.expressions[group_count:]
+            if expression.op in ("COUNT", "SUM", "AVG", "MAX", "MIN")
+        ))
+        buckets: dict = {}
+        if not rows and group_count == 0:
+            buckets[()] = []
+        for row in rows:
+            context = self._row_context(row, outer, [])
+            key = tuple(evaluate(expression, context) for expression in group_exprs)
+            buckets.setdefault(key, []).append(row)
+        output_keys = [expr_key(expression) for expression in group_exprs + aggregate_exprs]
+        result = []
+        for key, members in buckets.items():
+            values = list(key) + [
+                aggregate_value(expression, members, outer) for expression in aggregate_exprs
+            ]
+            result.append(RuntimeRow(values={}, output=tuple(values)))
+        return result, plan.output, output_keys
 
     def _sort_rows(self, plan, rows, outer, output_keys):
         """多列稳定排序；ASC 默认 NULL LAST、DESC 默认 NULL FIRST（编译器固定契约）。"""

@@ -13,7 +13,7 @@ from tests.fakes.memory import ExtendedMemoryCatalog
  'CREATE TABLE extra(b BOOL);',
  'UPDATE t SET id=id*2;',
  'DELETE FROM t WHERE id IN (1,2);',
- 'SELECT a.id FROM t a JOIN t b ON a.id=b.id;',
+ 'CREATE INDEX by_id ON t(id);',
 ])
 def test_guard_no_business_change(tmp_path,sql):
     db=open_database(tmp_path)
@@ -35,7 +35,7 @@ def test_failed_batch_and_transaction(tmp_path):
             db.execute('CREATE TABLE t(id INT); INSERT INTO t(id) VALUES(1); UPDATE t SET id=id*2; INSERT INTO t(id) VALUES(2);')
         assert db.execute('SELECT * FROM t;')[0].rows==((1,),)
         db.execute('BEGIN; INSERT INTO t(id) VALUES(3);')
-        with pytest.raises(MiniSQLError,match='FEATURE_NOT_EXECUTABLE'): db.execute('SELECT COUNT(*) FROM t;')
+        with pytest.raises(MiniSQLError,match='FEATURE_NOT_EXECUTABLE'): db.execute('CREATE VIEW v AS SELECT id FROM t;')
         with pytest.raises(MiniSQLError,match='TRANSACTION_ABORTED'): db.execute('COMMIT;')
         db.execute('ROLLBACK;')
         assert db.execute('SELECT * FROM t;')[0].rows==((1,),)

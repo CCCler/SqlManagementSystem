@@ -101,13 +101,16 @@ def test_distinct_on_extended_projection(db):
 
 
 def test_unsupported_operators_stay_gated(db):
+    """尚未接入的 DDL/DML 扩展仍被屏障拒绝，不会静默改动业务数据。"""
     from minisql.contracts.errors import ErrorStage
-    for sql in ("SELECT COUNT(*) AS c FROM t;",
-                "SELECT a.id FROM t a INNER JOIN t b ON a.id = b.id;"):
+    for sql in ("CREATE INDEX by_id ON t(id);",
+                "ALTER TABLE t ADD COLUMN x INT;",
+                "CREATE VIEW v AS SELECT id FROM t;"):
         with pytest.raises(MiniSQLError) as error:
             db.execute(sql)
         assert error.value.code == "FEATURE_NOT_EXECUTABLE"
         assert error.value.stage is ErrorStage.EXECUTION
+    assert rows(db, "SELECT id FROM t;")[1] == ((1,), (2,), (3,))
 
 
 def test_explain_extended_plan_does_not_execute(db):

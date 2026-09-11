@@ -403,6 +403,73 @@ class PersistentObjectCatalog:
                 f"{object_type} {object_name} 被依赖对象使用：{dependents}")
 
 
+class ExtendedCatalogAdapter:
+    """编译器只读目录适配器：把持久化对象翻译成编译器契约（extensions 类型）。
+
+    Binder/优化器经此读取视图、索引、触发器、账户与依赖；未实现可选接口
+    （如无索引枚举）时编译器按契约保守回退到全表扫描。"""
+
+    def __init__(self, catalog, objects, accounts) -> None:
+        self.catalog = catalog
+        self.objects = objects
+        self.accounts = accounts
+
+    # ---- 表（转发持久化目录） ----
+    def get_table(self, name: str):
+        return self.catalog.get_table(name)
+
+    def list_tables(self):
+        return self.catalog.list_tables()
+
+    # ---- 视图 ----
+    def get_view(self, name: str):
+        from minisql.contracts.extensions import ViewDefinition as CompilerView
+        view = self.objects.get_view(name)
+        if view is None:
+            return None
+        return CompilerView(
+            name=view.name, query=view.definition,
+            columns=tuple(column.name for column in view.columns))
+
+    # ---- 索引 ----
+    def get_index(self, name: str):
+        from minisql.contracts.extensions import IndexDefinition as CompilerIndex
+        index = self.objects.get_index(name)
+        if index is None:
+            return None
+        return CompilerIndex(name=index.name, table=index.table,
+                             columns=index.columns, unique=index.unique, available=True)
+
+    def list_indexes(self, table: str):
+        return tuple(self.get_index(index.name) for index in self.objects.get_indexes(table))
+
+    # ---- 触发器 ----
+    def get_trigger(self, name: str):
+        from minisql.contracts.extensions import TriggerDefinition as CompilerTrigger
+        trigger = self.objects.get_trigger(name)
+        if trigger is None:
+            return None
+        return CompilerTrigger(name=trigger.name, table=trigger.table,
+                               event=trigger.event, writes=())
+
+    def list_triggers(self):
+        return tuple(self.get_trigger(trigger.name) for trigger in self.objects._triggers.values())
+
+    # ---- 账户与库名 ----
+    def has_database(self, name: str) -> bool:
+        return name.lower() == "main"
+
+    def get_account(self, name: str):
+        return self.accounts.accounts.get(name.lower())
+
+    # ---- 依赖 ----
+    def get_dependencies(self, kind: str, name: str):
+        from minisql.contracts.extensions import ObjectDependency
+        return tuple(ObjectDependency(kind=dependency_kind, name=dependency_name)
+                     for dependency_kind, dependency_name
+                     in self.objects.dependencies(kind, name))
+
+
 class PersistentAccountStore(AccountStore):
     """__users/__grants 持久化的账户与授权存储；接口面与 AccountStore 一致。"""
 

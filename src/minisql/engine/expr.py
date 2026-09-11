@@ -33,13 +33,20 @@ class Row:
 
 
 class RowContext:
-    """求值上下文：当前行 + 外层行链（相关子查询逐层回溯）。"""
+    """求值上下文：当前行 + 外层行链（相关子查询逐层回溯）+ 投影键映射（聚合后求值）。
 
-    __slots__ = ("row", "outer")
+    mapped：表达式结构键 → 当前行投影值，用于聚合/投影后的表达式按 expr_key
+    取用已算好的值（如 HAVING COUNT(*) > 0 中的 COUNT(*)）。
+    runner：子查询执行器（计划, 外层上下文）→ 值元组列表；由执行器注入。
+    """
 
-    def __init__(self, row, outer=None):
+    __slots__ = ("row", "outer", "mapped", "runner")
+
+    def __init__(self, row, outer=None, mapped=None, runner=None):
         self.row = row
         self.outer = outer
+        self.mapped = mapped
+        self.runner = runner
 
     def lookup(self, scope, source):
         context = self
@@ -49,6 +56,10 @@ class RowContext:
                 return row.values[(scope, source)]
             context = context.outer
         return None
+
+    def derive(self, row, mapped=None):
+        """派生一个子上下文：沿用外层链并继承子查询执行器。"""
+        return RowContext(row, self, mapped, self.runner)
 
 
 def expr_key(expr):
@@ -62,6 +73,10 @@ def expr_key(expr):
 
 def evaluate(expr, context: RowContext):
     """求一个扩展表达式的值；返回 None / bool / int / Decimal / str / 日期时间。"""
+    if context.mapped:
+        key = expr_key(expr)
+        if key in context.mapped:
+            return context.mapped[key]
     op = expr.op
     if op == "literal":
         return expr.args[0]
@@ -87,6 +102,17 @@ def evaluate(expr, context: RowContext):
         high = evaluate(expr.args[2], context)
         return boolean_values("AND", _compare(">=", value, low), _compare("<=", value, high))
     if op == "IN":
+        from minisql.contracts.extensions import Expr
+        if any(not isinstance(arg, Expr) for arg in expr.args[1:]):
+            # 子查询形式：x IN (SELECT ...)，按三值 OR 逐值比较
+            left = evaluate(expr.args[0], context)
+            plan = expr.args[1]
+            result = False
+            for values in (context.runner(plan, context) if context.runner else ()):
+                result = boolean_values("OR", result, _compare("=", left, values[0]))
+                if result is True:
+                    return True
+            return result
         value = evaluate(expr.args[0], context)
         result = False
         for item in expr.args[1:]:
@@ -97,11 +123,27 @@ def evaluate(expr, context: RowContext):
     if op == "LIKE":
         args = [evaluate(a, context) for a in expr.args]
         return _like(args)
+    if op == "scalar":
+        values = _run_subquery(expr, context)
+        if not values:
+            return None
+        if len(values) > 1:
+            raise _error("SUBQUERY_MULTIPLE_ROWS", "标量子查询最多返回一行")
+        return values[0][0]
+    if op == "EXISTS":
+        return len(_run_subquery(expr, context)) > 0
     if op in ("COUNT", "SUM", "AVG", "MAX", "MIN"):
         raise _error("FEATURE_NOT_EXECUTABLE", f"聚合 {op} 需由 Aggregate 算子求值")
-    if op in ("scalar", "EXISTS") or op == "star":
-        raise _error("FEATURE_NOT_EXECUTABLE", f"表达式 {op} 的执行尚未接入")
+    if op == "star":
+        raise _error("FEATURE_NOT_EXECUTABLE", "表达式 * 的执行尚未接入")
     raise _error("FEATURE_NOT_EXECUTABLE", f"表达式 {op} 的执行尚未接入")
+
+
+def _run_subquery(expr, context):
+    """执行标量/EXISTS 子查询计划，返回值元组列表。"""
+    if context.runner is None:
+        raise _error("FEATURE_NOT_EXECUTABLE", "子查询执行器未接入")
+    return context.runner(expr.args[0], context)
 
 
 def _require_numeric(value, context=""):
@@ -237,6 +279,48 @@ def _like(args):
         return None
     escape = args[2] if len(args) == 3 else None
     return re.fullmatch(_like_regex(pattern, escape), value, re.DOTALL) is not None
+
+
+def _sub_context(row, outer):
+    """聚合成员的求值上下文：无外层时新建，有外层时沿用链并继承 runner。"""
+    return outer.derive(row) if outer is not None else RowContext(row)
+
+
+def aggregate_value(expression, rows, outer):
+    """聚合函数求值：COUNT(*) 计全部行、COUNT(expr) 跳过 NULL；
+    SUM/AVG/MAX/MIN 忽略 NULL，空输入为 NULL；SUM 溢出与 DECIMAL 位数按契约报错。"""
+    op = expression.op
+    if op == "COUNT":
+        if not expression.args:
+            return len(rows)
+        return sum(1 for row in rows
+                   if evaluate(expression.args[0], _sub_context(row, outer)) is not None)
+    values = [value for value in
+              (evaluate(expression.args[0], _sub_context(row, outer)) for row in rows)
+              if value is not None]
+    if not values:
+        return None
+    if op == "SUM":
+        if all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            total = sum(values)
+            if not INT_MIN <= total <= INT_MAX:
+                raise _error("INTEGER_OUT_OF_RANGE", "SUM 结果超出 64 位有符号整数范围")
+            return total
+        _require_numeric(values[0], "SUM ")
+        with localcontext() as ctx:
+            ctx.prec = _WORKING_PRECISION
+            total = sum(Decimal(value) for value in values)
+        return _fit_decimal("+", total, expression.type)
+    if op == "AVG":
+        _require_numeric(values[0], "AVG ")
+        with localcontext() as ctx:
+            ctx.prec = _WORKING_PRECISION
+            average = sum(Decimal(value) for value in values) / len(values)
+        return _fit_decimal("/", average, expression.type)
+    kinds = {_kind(value) for value in values}
+    if len(kinds) > 1 and not kinds <= {"INT", "DECIMAL"}:
+        raise _error("TYPE_MISMATCH", f"{op} 要求同类型值")
+    return max(values) if op == "MAX" else min(values)
 
 
 def _like_regex(pattern: str, escape) -> str:
