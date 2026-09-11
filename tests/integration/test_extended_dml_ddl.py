@@ -116,6 +116,26 @@ def test_index_maintenance_and_query_plan(tmp_path):
         db.close()
 
 
+def test_index_bound_with_mixed_numeric_types(tmp_path):
+    """DECIMAL 列上的索引遇到 INT 字面量边界：精确提升；视图重开后同样可用。"""
+    db = open_database(tmp_path / "db")
+    try:
+        db.execute("CREATE TABLE t(id INT, score DECIMAL(5,2));")
+        db.execute("INSERT INTO t(id,score) VALUES (1,88.5);")
+        db.execute("INSERT INTO t(id,score) VALUES (2,72.0);")
+        db.execute("CREATE INDEX by_score ON t(score);")
+        assert rows(db, "SELECT id FROM t WHERE score > 80;") == ((1,),)   # INT 字面量上界
+        assert rows(db, "SELECT id FROM t WHERE score >= 72;") == ((2,), (1,))
+        db.execute("CREATE VIEW top AS SELECT id, score FROM t WHERE score > 80;")
+    finally:
+        db.close()
+    reopened = open_database(tmp_path / "db")
+    try:
+        assert reopened.execute("SELECT id FROM top;")[0].rows == ((1,),)
+    finally:
+        reopened.close()
+
+
 def test_unique_index_rejects_duplicates(db, tmp_path):
     try:
         db.execute("CREATE TABLE t(id INT, code VARCHAR);")

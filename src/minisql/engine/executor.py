@@ -157,6 +157,28 @@ def _scan_leaves(plan) -> list:
     return leaves
 
 
+def _coerce_index_bound(column, value, direction):
+    """索引边界与列类型对齐；不精确时放宽为超集（上层 Filter 做精确残余检查）。"""
+    from decimal import Decimal
+    if value is None or column is None:
+        return value
+    kind = column.data_type.value
+    if kind == "DECIMAL":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return Decimal(value)  # 精确提升
+        return value
+    if kind == "INT" and isinstance(value, Decimal):
+        import math
+        if direction == "hi":
+            return math.ceil(value)          # 上界放宽
+        if direction == "lo":
+            return math.floor(value)         # 下界放宽
+        return int(value) if value == int(value) else math.floor(value)
+    return value
+
+
 def _sort_pass(rows, expression, descending, outer, output_keys):
     """单键稳定排序：DESC 时 NULL 在前，ASC 时 NULL 在后。"""
     def key_of(row):
@@ -410,20 +432,22 @@ class PlanExecutor(WritePathMixin):
         if index_def is None or index_def.root_page is None:
             raise _execution_error("FEATURE_NOT_EXECUTABLE", f"索引 {attributes.get('index')} 不可用")
         index = self._index_tree(schema, index_def)
+        key_columns = {column.name: column for column in schema.columns}
         lo: list = []
         hi: list = []
         lo_inclusive = hi_inclusive = True
-        for _, operator, literal_expr in attributes.get("bounds") or ():
+        for column_name, operator, literal_expr in attributes.get("bounds") or ():
             value = evaluate(literal_expr, RowContext(RuntimeRow()))
+            column = key_columns.get(column_name)
             if operator == "=":
-                lo.append(value)
-                hi.append(value)
+                lo.append(_coerce_index_bound(column, value, "="))
+                hi.append(_coerce_index_bound(column, value, "="))
             elif operator in (">", ">="):
-                lo.append(value)
+                lo.append(_coerce_index_bound(column, value, "lo"))
                 lo_inclusive = operator == ">="
                 break
             else:
-                hi.append(value)
+                hi.append(_coerce_index_bound(column, value, "hi"))
                 hi_inclusive = operator == "<="
                 break
         record_ids = index.range_scan(tuple(lo) or None, tuple(hi) or None,
