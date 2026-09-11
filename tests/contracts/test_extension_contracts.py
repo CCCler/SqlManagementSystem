@@ -93,14 +93,11 @@ def test_view_registration_and_lookup_contract(object_catalog):
 
 
 def test_trigger_ordering_and_event_filter_contract(object_catalog):
-    object_catalog.register_trigger(TriggerDefinition(
-        "t2", "orders", "INSERT", "SELECT 1;", "AFTER", "2026-09-11T10:00:02"))
-    object_catalog.register_trigger(TriggerDefinition(
-        "t1", "orders", "INSERT", "SELECT 1;", "AFTER", "2026-09-11T10:00:01"))
-    object_catalog.register_trigger(TriggerDefinition(
-        "t3", "orders", "DELETE", "SELECT 1;", "AFTER", "2026-09-11T10:00:03"))
+    object_catalog.register_trigger(TriggerDefinition("t2", "orders", "INSERT", "SELECT 1;", 2))
+    object_catalog.register_trigger(TriggerDefinition("t1", "orders", "INSERT", "SELECT 1;", 1))
+    object_catalog.register_trigger(TriggerDefinition("t3", "orders", "DELETE", "SELECT 1;", 3))
     inserts = object_catalog.get_triggers("ORDERS", "insert")
-    assert tuple(t.name for t in inserts) == ("t1", "t2")  # 同事件按创建时间先后
+    assert tuple(t.name for t in inserts) == ("t1", "t2")  # 同事件按 created_order 先后
     assert tuple(t.name for t in object_catalog.get_triggers("orders", "DELETE")) == ("t3",)
 
 

@@ -390,7 +390,7 @@ class WritePathMixin:
             definition += ";"
         self.objects.register_trigger(TriggerDefinition(
             attributes["trigger"], attributes["table"], attributes["event"].upper(),
-            definition, "AFTER", datetime.now().isoformat(timespec="seconds")))
+            definition, self.objects.next_trigger_order()))
         self.storage.flush()
         return ExecutionResult(message=f"触发器 {attributes['trigger']} 已创建")
 

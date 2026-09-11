@@ -51,7 +51,7 @@
 | 系统表 | 列（固定顺序） | 与成员三提案的差异 |
 |---|---|---|
 | `__views` | view_id INT, view_name VARCHAR, definition VARCHAR, column_index INT, column_name VARCHAR, column_type VARCHAR | 一致 |
-| `__triggers` | trigger_id INT, trigger_name VARCHAR, table_name VARCHAR, event VARCHAR, timing VARCHAR, action VARCHAR, created_at VARCHAR | 一致 |
+| `__triggers` | trigger_id INT, trigger_name VARCHAR, table_name VARCHAR, event VARCHAR, action VARCHAR, **created_order INT** | 按成员三定稿收敛：首版固定 AFTER，无需 timing；created_order 保证同事件多触发器顺序稳定 |
 | `__indexes` | index_id INT, index_name VARCHAR, table_name VARCHAR, unique_flag INT, column_index INT, column_name VARCHAR, **root_page INT** | **新增 root_page**（必需，见 [F09 约定](F09索引接口约定-成员二.md) 第四节） |
 | `__users` | user_id INT, account_id VARCHAR, user_name VARCHAR, salt VARCHAR, key VARCHAR, iterations INT, is_admin INT | 一致（salt/key 编码见第四节） |
 | `__grants` | user_name VARCHAR, object_type VARCHAR, object_name VARCHAR, permission VARCHAR | 一致 |
@@ -138,6 +138,16 @@ bootstrap()            # 幂等创建/恢复全部系统表
 5. **敏感字段**：`salt`/`key` 不出现在 `--trace`、日志或查询结果；
 6. **边界**：超长视图/触发器定义按 4067 字节上限报错，不写坏数据。
 
+**执行状态（2026-09-11）**：
+
+- **已执行**：① 写入→重开一致（`tests/integration/test_object_persistence.py` 覆盖视图/触发器/索引含
+  `root_page`/依赖/账户/授权/约束，`tests/storage/test_metadata_persistence.py` 覆盖系统表记录）；
+  ④ 迁移/备份保留（`tests/storage/test_migrate.py::test_apply_preserves_system_tables`）；
+  ⑥ 边界（超单页容量按 `INVALID_RECORD` 拒绝）。
+- **未执行**：② 事务回滚、③ 崩溃恢复、⑤ 敏感字段日志排除。三项均依赖成员三把元数据写入接入
+  事务日志与上层过滤；当前 `engine/objects.py` 写入直接 `flush()`、未走事务，尚无法验证回滚与
+  崩溃恢复，故不计入成员二已完成验收。
+
 ## 八、待三方确认
 
 1. **编号方案 A/B**（第二节）：成员二建议 B；若选 A，需确认迁移重编号的验收与回滚要求。
@@ -153,9 +163,12 @@ bootstrap()            # 幂等创建/恢复全部系统表
 - [x] 成员二：本持久化契约草案（编号、结构、编码、恢复、迁移、验证计划）。
 - [x] 成员二：系统表物理结构与记录编解码落地（`storage/metadata.py`，见第十节）。
 - [x] 成员二：迁移保留系统表（`engine/migrate.py` 改为枚举用户表 + 系统表，见第十节）。
+- [x] 成员二/三：系统表结构收敛为单一来源，`__indexes.root_page` 与 `__constraints` 落地（见第十一节）。
+- [x] 成员三：`engine/objects.py` 实现系统表读写（`PersistentObjectCatalog`/`PersistentAccountStore`），
+      `bootstrap` 幂等补齐；`catalog.list_tables()` 已排除 `__` 前缀。
+- [x] 成员二：真实文件持久化/恢复验证（视图/触发器/索引/依赖/账户/授权/约束 + 迁移保留，见 §7 说明）。
 - [ ] 三方确认本草案（尤其编号方案与 `__constraints`/`root_page`）。
-- [ ] 成员三：实现 `PersistentCatalog` 的系统表读写与 `bootstrap` 幂等补齐。
-- [ ] 成员二：真实文件持久化/恢复验证测试（本项验收，待成员三 Catalog 落地后联调）。
+- [ ] 成员三：§7 的事务回滚/崩溃恢复/敏感字段日志排除（需将元数据写入接入事务与上层过滤）。
 
 ## 十、成员二落地进展与对其他成员的提醒（2026-09-11）
 
@@ -195,3 +208,23 @@ bootstrap()            # 幂等创建/恢复全部系统表
 
 - 编号方案 A/B（成员二已按 B 实现迁移；若改 A 需另做用户表重编号与回滚评审）；
 - `__constraints` 独立表 vs 扩展 `__catalog`；`__indexes.root_page`；系统表可见性与敏感列日志排除边界。
+
+## 十一、未收敛项的处理结果（2026-09-11 收敛）
+
+成员三落地 `engine/objects.py` 后，双方系统表定义出现分歧，已按下表收敛。**系统表物理结构的唯一来源为
+`src/minisql/storage/metadata.py`**，`engine/objects.py` 只按名字引用（`VIEWS_CATALOG = metadata.VIEWS` 等），
+不再复制列定义，杜绝再次分歧。
+
+| 未收敛项 | 处理 | 位置 |
+|---|---|---|
+| `__triggers` 列分歧（`timing/created_at` vs `created_order`） | 采用成员三定稿：`event, action, created_order`；`metadata.TRIGGERS` 已同步 | `storage/metadata.py` |
+| `__indexes` 缺 `root_page`（F09 硬前提） | 已补 `root_page INT`；`IndexDefinition.root_page` 落盘并在重开时恢复 | `metadata.INDEXES`、`objects.py` 的 `register_index/_restore` |
+| 缺 `__constraints`（F07 落点） | 已建表并实现 `register/get/unregister_constraint`（按列名解析列序号，一列一行） | `metadata.CONSTRAINTS`、`objects.py` |
+| 系统表重复定义 | `objects.py` 改为引用 `metadata` 常量，单一来源 | `engine/objects.py` |
+
+**仍属成员三执行器责任（本次未做，不属"未收敛的接口"）**：CREATE INDEX 构建后用 `index.root_page`
+回填登记；写入路径的实际约束校验、默认值展开与存量数据校验；DROP TABLE 时清理 `__constraints`/`__indexes`。
+`__constraints.kind` 取值须与成员一 `Constraint.kind` 一致（PRIMARY KEY/FOREIGN KEY/UNIQUE/NOT NULL/CHECK/DEFAULT）。
+
+验收：新增 `tests/integration/test_object_persistence.py` 的 root_page 与约束重开用例；
+`tests/storage/test_metadata_persistence.py` 同步触发器列；全套 **950 项通过**。

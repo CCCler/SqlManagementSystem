@@ -39,14 +39,13 @@ class ViewDefinition:
 
 @dataclass(frozen=True)
 class TriggerDefinition:
-    """触发器定义：AFTER 行级，同一事件按创建时间（ISO 文本）先后执行。"""
+    """触发器定义：AFTER 行级，同一事件多个触发器按 created_order 升序执行。"""
 
     name: str
     table: str
     event: str  # INSERT / UPDATE / DELETE
     action: str
-    timing: str = "AFTER"
-    created_at: str = ""
+    created_order: int = 0
 
 
 @dataclass(frozen=True)
@@ -169,9 +168,9 @@ class PersistentObjectCatalog:
 
         triggers: dict[str, TriggerDefinition] = {}
         for record in self.storage.scan(self._table(TRIGGERS)):
-            _, name, table_name, event, timing, action, created_at = record.row
+            _, name, table_name, event, action, created_order = record.row
             triggers[name.lower()] = TriggerDefinition(
-                name, table_name, event, action, timing, created_at)
+                name, table_name, event, action, created_order)
 
         indexes: dict[str, IndexDefinition] = {}
         columns_by_index: dict[int, dict[int, str]] = {}
@@ -261,20 +260,24 @@ class PersistentObjectCatalog:
         trigger_id = _next_id(self.storage, table)
         self.storage.insert(table, (
             trigger_id, key, trigger.table.lower(), trigger.event.upper(),
-            trigger.timing.upper(), trigger.action, trigger.created_at,
+            trigger.action, trigger.created_order,
         ))
         self.storage.flush()
         self._triggers[key] = TriggerDefinition(
-            key, trigger.table, trigger.event, trigger.action, trigger.timing, trigger.created_at)
+            key, trigger.table, trigger.event, trigger.action, trigger.created_order)
 
     def get_trigger(self, name: str) -> TriggerDefinition | None:
         return self._triggers.get(name.lower())
 
+    def next_trigger_order(self) -> int:
+        """下一个创建序号：同一事件按 created_order 升序执行。"""
+        return 1 + max((trigger.created_order for trigger in self._triggers.values()), default=0)
+
     def get_triggers(self, table: str, event: str) -> tuple[TriggerDefinition, ...]:
-        """指定表的指定事件的全部触发器，按创建时间先后排序（同刻按名称）。"""
+        """指定表的指定事件的全部触发器，按 created_order 升序（同序按名称）。"""
         key = table.lower()
         matched = [t for t in self._triggers.values() if t.table == key and t.event == event.upper()]
-        return tuple(sorted(matched, key=lambda trigger: (trigger.created_at, trigger.name)))
+        return tuple(sorted(matched, key=lambda trigger: (trigger.created_order, trigger.name)))
 
     def unregister_trigger(self, name: str) -> None:
         key = name.lower()

@@ -56,11 +56,15 @@ class MemoryObjectCatalog:
     def get_trigger(self, name: str) -> TriggerDefinition | None:
         return self._triggers.get(name.lower())
 
+    def next_trigger_order(self) -> int:
+        """下一个创建序号（与持久化实现一致的契约）。"""
+        return 1 + max((trigger.created_order for trigger in self._triggers.values()), default=0)
+
     def get_triggers(self, table: str, event: str) -> tuple[TriggerDefinition, ...]:
-        """指定表的指定事件的全部触发器，按创建时间先后排序（同刻按名称）。"""
+        """指定表的指定事件的全部触发器，按 created_order 升序（同序按名称）。"""
         key = table.lower()
         matched = [t for t in self._triggers.values() if t.table == key and t.event == event.upper()]
-        return tuple(sorted(matched, key=lambda trigger: (trigger.created_at, trigger.name)))
+        return tuple(sorted(matched, key=lambda trigger: (trigger.created_order, trigger.name)))
 
     def unregister_trigger(self, name: str) -> None:
         if self._triggers.pop(name.lower(), None) is None:

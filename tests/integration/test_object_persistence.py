@@ -30,7 +30,7 @@ def test_object_tables_roundtrip_real_storage(tmp_path):
     database.objects.register_view(
         ViewDefinition("v1", "SELECT id FROM t;", (ColumnSchema("id", DataType.INT),)))
     database.objects.register_trigger(
-        TriggerDefinition("tr1", "t", "INSERT", "SELECT 1;", "AFTER", "2026-09-11T10:00:01"))
+        TriggerDefinition("tr1", "t", "INSERT", "SELECT 1;", 1))
     database.objects.register_index(IndexDefinition("i1", "t", ("id",), unique=True, root_page=5))
     database.objects.register_constraint(ConstraintDefinition("t", "pk_t", "PRIMARY KEY", ("id",)))
     database.objects.register_constraint(ConstraintDefinition(
