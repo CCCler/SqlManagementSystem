@@ -17,7 +17,7 @@ def run_file(data_dir: Path, sql_file: Path, *, expect_error: str | None = None)
     expect_error 提供时断言退出码 1 且 stderr 包含指定错误码，用于错误诊断演示。
     """
     completed = subprocess.run(
-        [sys.executable, "-m", "minisql", "--data-dir", str(data_dir), "--file", str(sql_file)],
+        [sys.executable, "-X", "utf8", "-m", "minisql", "--data-dir", str(data_dir), "--file", str(sql_file)],
         cwd=ROOT, text=True, encoding="utf-8", capture_output=True,
     )
     print(completed.stdout, end="")
@@ -34,7 +34,7 @@ def run_file(data_dir: Path, sql_file: Path, *, expect_error: str | None = None)
 def run_interactive(data_dir: Path, sql: str) -> None:
     """交互模式执行 SQL（管道 stdin）。"""
     completed = subprocess.run(
-        [sys.executable, "-m", "minisql", "--data-dir", str(data_dir)],
+        [sys.executable, "-X", "utf8", "-m", "minisql", "--data-dir", str(data_dir)],
         cwd=ROOT, input=sql, text=True, encoding="utf-8", capture_output=True,
     )
     print(completed.stdout, end="")

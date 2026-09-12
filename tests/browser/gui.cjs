@@ -41,6 +41,17 @@ const originReady = new Promise((resolve,reject) => {
   const sample = await page.locator('#sql-editor').inputValue();
   const first = await run(sample); assert.equal(first.results.at(-1).rows.length,2);
   assert.equal(await page.locator('#table-count').innerText(),'1');
+  assert.equal((await run('SELECT COUNT(*) FROM experiments;')).results[0].rows[0][0],52);
+  // 当前入门示例：52 行，真实浏览请求按每页 10 行走完六页。
+  await page.locator('.table-query').click(); await settle();
+  for(let index=0;index<6;index++){
+    assert.equal(await page.locator('#browse-content tbody tr').count(),index===5?2:10);
+    const next=page.locator('#browse-content').getByRole('button',{name:'下一页',exact:true});
+    assert.equal(await next.isDisabled(),index===5);
+    if(index<5){const reply=page.waitForResponse(r=>r.url()===origin+'/api/execute');await next.click();assert.equal((await(await reply).json()).ok,true);await settle();}
+  }
+  await page.screenshot({path:path.join(root,'docs/assets/final-gui-browse.png'),fullPage:true});
+  await page.locator('[data-view="workbench"]').click();
   await run('SELECT id, name, score FROM experiments\nWHERE score > 80 AND 1 = 1;');
   fs.mkdirSync(path.join(root,'docs/assets'),{recursive:true});
   await page.screenshot({path:path.join(root,'docs/assets/gui-workbench.png'),fullPage:true});
@@ -59,7 +70,7 @@ const originReady = new Promise((resolve,reject) => {
   await page.locator('#sql-editor').fill('DROP TABLE experiments;\nSELECT * FROM experiments;');
   await page.locator('#sql-editor').evaluate(node=>{node.focus();node.setSelectionRange(node.value.indexOf('SELECT'),node.value.length);node.dispatchEvent(new Event('select'));});
   const selected=page.waitForResponse(r=>r.url()===origin+'/api/execute');
-  await page.locator('#run-selection').click(); assert.equal((await (await selected).json()).results[0].rows.length,3); await settle();
+  await page.locator('#run-selection').click(); assert.equal((await (await selected).json()).results[0].rows.length,52); await settle();
   const bad = await run('-- test\nSELECT absent FROM experiments;',false); assert.equal(bad.error.position.line,2);
   await page.getByRole('button',{name:/定位到第 2 行/}).click();
   assert.match(await page.locator('#cursor-position').innerText(),/行 2/);
@@ -69,20 +80,22 @@ const originReady = new Promise((resolve,reject) => {
   await run("INSERT INTO experiments(id,name,score) VALUES ('bad','x',1);",false);
   assert.equal(await page.locator('#commit').isDisabled(),true);
   await page.locator('#rollback').click(); await settle();
-  assert.equal((await run('SELECT * FROM experiments;')).results[0].rows.length,3);
+  assert.equal((await run('SELECT * FROM experiments;')).results[0].rows.length,52);
   // 多语句错误不重复执行或伪装为整体回滚。
-  const partial = await run("INSERT INTO experiments(id,name,score) VALUES (4,'Once',88); SELECT missing FROM experiments;",false);
+  const partial = await run("INSERT INTO experiments(id,name,score) VALUES (1000,'Once',88); SELECT missing FROM experiments;",false);
   assert.deepEqual(partial.results,[]);
-  assert.equal((await run('SELECT * FROM experiments WHERE id=4;')).results[0].rows.length,1);
+  assert.equal((await run('SELECT * FROM experiments WHERE id=1000;')).results[0].rows.length,1);
   // 结果分页不会再次发送 SQL。
-  const inserts=Array.from({length:55},(_,i)=>`INSERT INTO experiments(id,name,score) VALUES (${i+10},'row',50);`).join('\n');
+  const inserts=Array.from({length:55},(_,i)=>`INSERT INTO experiments(id,name,score) VALUES (${i+100},'row',50);`).join('\n');
   await run(inserts); await run('SELECT * FROM experiments;');
   assert.equal(await page.locator('#results tbody tr').count(),50);
   let requests=0; const count=r=>{if(r.url().endsWith('/api/execute'))requests++;}; page.on('request',count);
-  await page.getByRole('button',{name:'下一页',exact:true}).click();
-  assert.equal(await page.locator('#results tbody tr').count(),9); assert.equal(requests,0); page.off('request',count);
+  await page.locator('#results').getByRole('button',{name:'下一页',exact:true}).click();
+  assert.equal(await page.locator('#results tbody tr').count(),50);
+  await page.locator('#results').getByRole('button',{name:'下一页',exact:true}).click();
+  assert.equal(await page.locator('#results tbody tr').count(),8); assert.equal(requests,0); page.off('request',count);
   // 数据按文本展示，不解析 HTML。
-  await run("INSERT INTO experiments(id,name,score) VALUES (100,'<img src=x onerror=alert(1)>',1); SELECT name FROM experiments WHERE id=100;");
+  await run("INSERT INTO experiments(id,name,score) VALUES (10000,'<img src=x onerror=alert(1)>',1); SELECT name FROM experiments WHERE id=10000;");
   assert.equal(await page.locator('#results img').count(),0);
   assert.match(await page.locator('#results').innerText(),/<img src=x/);
   // 文件打开、保存，中文内容无损。
@@ -113,7 +126,7 @@ const originReady = new Promise((resolve,reject) => {
   // 窄屏不产生页面级横向溢出。
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-  await page.screenshot({path:path.join(directory,'mobile.png'),fullPage:true});
+  await page.screenshot({path:path.join(root,'docs/assets/final-gui-mobile.png'),fullPage:true});
   assert.deepEqual(errors,[]);
   await page.locator('#connection-button').click(); await page.locator('#disconnect').click();
   await page.waitForFunction(()=>document.querySelector('#connection-status').textContent==='已断开');

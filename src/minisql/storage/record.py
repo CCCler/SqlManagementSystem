@@ -581,6 +581,34 @@ class HeapStorage:
             yield from records
             page_id = next_page
 
+    def fetch(self, schema: TableSchema, record_id: RecordId) -> StoredRecord:
+        """索引回表：按 RecordId 读取一条记录，并校验页、槽及表归属。"""
+        table_id = self._require_table_id(schema)
+        root_page = self._get_root_page(table_id)
+        if root_page == NO_ROOT:
+            raise MiniSQLError(ErrorStage.STORAGE, "UNKNOWN_TABLE", schema.name)
+        if (record_id.page_id <= 0 or record_id.slot_id < 0 or
+                record_id.page_id >= self._read_meta().next_page_id):
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        page = self.buffer.get_page(record_id.page_id)
+        header = decode_header(page)
+        if (header.page_id != record_id.page_id or header.page_type != PAGE_TYPE_DATA or
+                header.table_id not in (0, table_id)):
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        if header.table_id == 0:
+            if not self._legacy_page_belongs(root_page, record_id.page_id, table_id):
+                raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+            page = self.buffer.get_page(record_id.page_id)
+            header = decode_header(page)
+        if record_id.slot_id >= header.slot_count:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        slot_offset = HEADER_SIZE + record_id.slot_id * SLOT_SIZE
+        offset, length, flags = decode_slot(page[slot_offset:slot_offset + SLOT_SIZE])
+        if (flags & SLOT_DELETED or length <= 0 or
+                offset < HEADER_SIZE + header.slot_count * SLOT_SIZE or offset + length > PAGE_SIZE):
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        return StoredRecord(record_id, self.codec.decode(schema, bytes(page[offset:offset + length])))
+
     def _legacy_page_belongs(self, root_page: int, target: int, table_id: int) -> bool:
         """旧页头的 table_id=0 含义不确定，必须从目标表根页验证归属。"""
         page_id = root_page

@@ -91,6 +91,12 @@ class MemoryStorage:
             raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
         del self.records[table_id][record_id]
 
+    def fetch(self, schema: TableSchema, record_id: RecordId) -> StoredRecord:
+        table_id = self._table_id(schema)
+        if record_id not in self.records[table_id]:
+            raise MiniSQLError(ErrorStage.STORAGE, "INVALID_RECORD", str(record_id))
+        return StoredRecord(record_id, self.records[table_id][record_id])
+
     def rewrite_table(self, schema: TableSchema, new_schema: TableSchema,
                       transform) -> TableSchema:
         table_id = self._table_id(schema)

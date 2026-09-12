@@ -1,0 +1,1213 @@
+{
+  "experiment": "page-cache-replay",
+  "page_size": 4096,
+  "accesses": [
+    1,
+    2,
+    1,
+    3,
+    1,
+    2,
+    4,
+    1,
+    2,
+    3
+  ],
+  "write_pages": [
+    1,
+    2
+  ],
+  "round_count": 3,
+  "scope_description": {
+    "continuous": "每轮刷新但持续保留同一缓存，可观察热缓存",
+    "reset-per-round": "每轮刷新后重建缓存，模拟当前数据库跨事务的缓存生命周期"
+  },
+  "measurement": "独立页缓存实验，非 SQL 事务或端到端吞吐量测试；不计建页、重开校验及操作系统文件缓存",
+  "writebacks_description": "成功写回的脏页次数（主动刷新及淘汰），不是 fsync 次数；每次访问写入页时计数器加一",
+  "results": [
+    {
+      "policy": "LRU",
+      "capacity": 2,
+      "scope": "continuous",
+      "totals": {
+        "hits": 6,
+        "misses": 24,
+        "evictions": 22,
+        "writebacks": 15,
+        "hit_rate": 0.2
+      },
+      "rounds": [
+        {
+          "hits": 2,
+          "misses": 8,
+          "evictions": 6,
+          "round": 1,
+          "writebacks": 5
+        },
+        {
+          "hits": 2,
+          "misses": 8,
+          "evictions": 8,
+          "round": 2,
+          "writebacks": 5
+        },
+        {
+          "hits": 2,
+          "misses": 8,
+          "evictions": 8,
+          "round": 3,
+          "writebacks": 5
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "FIFO",
+      "capacity": 2,
+      "scope": "continuous",
+      "totals": {
+        "hits": 3,
+        "misses": 27,
+        "evictions": 25,
+        "writebacks": 18,
+        "hit_rate": 0.1
+      },
+      "rounds": [
+        {
+          "hits": 1,
+          "misses": 9,
+          "evictions": 7,
+          "round": 1,
+          "writebacks": 6
+        },
+        {
+          "hits": 1,
+          "misses": 9,
+          "evictions": 9,
+          "round": 2,
+          "writebacks": 6
+        },
+        {
+          "hits": 1,
+          "misses": 9,
+          "evictions": 9,
+          "round": 3,
+          "writebacks": 6
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "LRU",
+      "capacity": 3,
+      "scope": "continuous",
+      "totals": {
+        "hits": 21,
+        "misses": 9,
+        "evictions": 6,
+        "writebacks": 6,
+        "hit_rate": 0.7
+      },
+      "rounds": [
+        {
+          "hits": 5,
+          "misses": 5,
+          "evictions": 2,
+          "round": 1,
+          "writebacks": 2
+        },
+        {
+          "hits": 8,
+          "misses": 2,
+          "evictions": 2,
+          "round": 2,
+          "writebacks": 2
+        },
+        {
+          "hits": 8,
+          "misses": 2,
+          "evictions": 2,
+          "round": 3,
+          "writebacks": 2
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "FIFO",
+      "capacity": 3,
+      "scope": "continuous",
+      "totals": {
+        "hits": 15,
+        "misses": 15,
+        "evictions": 12,
+        "writebacks": 12,
+        "hit_rate": 0.5
+      },
+      "rounds": [
+        {
+          "hits": 3,
+          "misses": 7,
+          "evictions": 4,
+          "round": 1,
+          "writebacks": 4
+        },
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 4,
+          "round": 2,
+          "writebacks": 4
+        },
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 4,
+          "round": 3,
+          "writebacks": 4
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "LRU",
+      "capacity": 4,
+      "scope": "continuous",
+      "totals": {
+        "hits": 26,
+        "misses": 4,
+        "evictions": 0,
+        "writebacks": 6,
+        "hit_rate": 0.8666666666666667
+      },
+      "rounds": [
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 1,
+          "writebacks": 2
+        },
+        {
+          "hits": 10,
+          "misses": 0,
+          "evictions": 0,
+          "round": 2,
+          "writebacks": 2
+        },
+        {
+          "hits": 10,
+          "misses": 0,
+          "evictions": 0,
+          "round": 3,
+          "writebacks": 2
+        }
+      ],
+      "replacement_log": [],
+      "reopen_verified": true
+    },
+    {
+      "policy": "FIFO",
+      "capacity": 4,
+      "scope": "continuous",
+      "totals": {
+        "hits": 26,
+        "misses": 4,
+        "evictions": 0,
+        "writebacks": 6,
+        "hit_rate": 0.8666666666666667
+      },
+      "rounds": [
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 1,
+          "writebacks": 2
+        },
+        {
+          "hits": 10,
+          "misses": 0,
+          "evictions": 0,
+          "round": 2,
+          "writebacks": 2
+        },
+        {
+          "hits": 10,
+          "misses": 0,
+          "evictions": 0,
+          "round": 3,
+          "writebacks": 2
+        }
+      ],
+      "replacement_log": [],
+      "reopen_verified": true
+    },
+    {
+      "policy": "LRU",
+      "capacity": 2,
+      "scope": "reset-per-round",
+      "totals": {
+        "hits": 6,
+        "misses": 24,
+        "evictions": 18,
+        "writebacks": 15,
+        "hit_rate": 0.2
+      },
+      "rounds": [
+        {
+          "hits": 2,
+          "misses": 8,
+          "evictions": 6,
+          "round": 1,
+          "writebacks": 5
+        },
+        {
+          "hits": 2,
+          "misses": 8,
+          "evictions": 6,
+          "round": 2,
+          "writebacks": 5
+        },
+        {
+          "hits": 2,
+          "misses": 8,
+          "evictions": 6,
+          "round": 3,
+          "writebacks": 5
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "LRU"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "FIFO",
+      "capacity": 2,
+      "scope": "reset-per-round",
+      "totals": {
+        "hits": 3,
+        "misses": 27,
+        "evictions": 21,
+        "writebacks": 18,
+        "hit_rate": 0.1
+      },
+      "rounds": [
+        {
+          "hits": 1,
+          "misses": 9,
+          "evictions": 7,
+          "round": 1,
+          "writebacks": 6
+        },
+        {
+          "hits": 1,
+          "misses": 9,
+          "evictions": 7,
+          "round": 2,
+          "writebacks": 6
+        },
+        {
+          "hits": 1,
+          "misses": 9,
+          "evictions": 7,
+          "round": 3,
+          "writebacks": 6
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "LRU",
+      "capacity": 3,
+      "scope": "reset-per-round",
+      "totals": {
+        "hits": 15,
+        "misses": 15,
+        "evictions": 6,
+        "writebacks": 6,
+        "hit_rate": 0.5
+      },
+      "rounds": [
+        {
+          "hits": 5,
+          "misses": 5,
+          "evictions": 2,
+          "round": 1,
+          "writebacks": 2
+        },
+        {
+          "hits": 5,
+          "misses": 5,
+          "evictions": 2,
+          "round": 2,
+          "writebacks": 2
+        },
+        {
+          "hits": 5,
+          "misses": 5,
+          "evictions": 2,
+          "round": 3,
+          "writebacks": 2
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "LRU"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "LRU"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "FIFO",
+      "capacity": 3,
+      "scope": "reset-per-round",
+      "totals": {
+        "hits": 9,
+        "misses": 21,
+        "evictions": 12,
+        "writebacks": 12,
+        "hit_rate": 0.3
+      },
+      "rounds": [
+        {
+          "hits": 3,
+          "misses": 7,
+          "evictions": 4,
+          "round": 1,
+          "writebacks": 4
+        },
+        {
+          "hits": 3,
+          "misses": 7,
+          "evictions": 4,
+          "round": 2,
+          "writebacks": 4
+        },
+        {
+          "hits": 3,
+          "misses": 7,
+          "evictions": 4,
+          "round": 3,
+          "writebacks": 4
+        }
+      ],
+      "replacement_log": [
+        {
+          "round": 1,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 1,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 2,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 1,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 2,
+          "dirty": true,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 3,
+          "dirty": false,
+          "policy": "FIFO"
+        },
+        {
+          "round": 3,
+          "page": 4,
+          "dirty": false,
+          "policy": "FIFO"
+        }
+      ],
+      "reopen_verified": true
+    },
+    {
+      "policy": "LRU",
+      "capacity": 4,
+      "scope": "reset-per-round",
+      "totals": {
+        "hits": 18,
+        "misses": 12,
+        "evictions": 0,
+        "writebacks": 6,
+        "hit_rate": 0.6
+      },
+      "rounds": [
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 1,
+          "writebacks": 2
+        },
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 2,
+          "writebacks": 2
+        },
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 3,
+          "writebacks": 2
+        }
+      ],
+      "replacement_log": [],
+      "reopen_verified": true
+    },
+    {
+      "policy": "FIFO",
+      "capacity": 4,
+      "scope": "reset-per-round",
+      "totals": {
+        "hits": 18,
+        "misses": 12,
+        "evictions": 0,
+        "writebacks": 6,
+        "hit_rate": 0.6
+      },
+      "rounds": [
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 1,
+          "writebacks": 2
+        },
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 2,
+          "writebacks": 2
+        },
+        {
+          "hits": 6,
+          "misses": 4,
+          "evictions": 0,
+          "round": 3,
+          "writebacks": 2
+        }
+      ],
+      "replacement_log": [],
+      "reopen_verified": true
+    }
+  ]
+}

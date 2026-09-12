@@ -277,8 +277,9 @@ class Binder:
             if len(left.output) != len(right.output):
                 fail('SET_COLUMN_COUNT', '集合操作列数不一致', q)
             output = tuple(OutputField(a.name, common_type(a.type, b.type, q)) for a, b in zip(left.output, right.output))
-            plan = self.plan('SetOperation', (left, right), output=output, attrs=(('kind', q.set_op),), caps=('set_operation',))
             self.scope_id += 1
+            plan = self.plan('SetOperation', (left, right), output=output,
+                             attrs=(('kind', q.set_op), ('output_scope', self.scope_id)), caps=('set_operation',))
             fields = [FieldBinding(self.scope_id, 0, i, '', c.name, c.type) for i, c in enumerate(output)]
             return self.sort_limit(plan, q, [fields], {}, (), False)
         self.scope_id += 1

@@ -1,6 +1,6 @@
 # MiniSQL：大型平台软件设计实习
 
-当前状态（2026-09-11）：**SQL 编译器、页式存储、执行引擎、命令行与图形工作台已实现；十二类 SQL 扩展（多表/聚合/子查询/集合/别名/结构变更/约束/新类型/索引/视图/触发器/权限）的编译与执行均已接通，核心流程、事务、并发、崩溃恢复及扩展功能通过验证。** 最近全套测试为 **982 项通过，无失败、无跳过**；报告与答辩材料整理仍待完成。
+当前状态（2026-09-12）：**指导书核心软件要求及已列明的十二类 SQL 扩展场景完成本轮验收；全套 1052 项测试通过，无失败、无跳过。** 浏览器、CLI、重启与崩溃恢复、安装包隔离运行及真实 SQL 索引实验通过。详细范围、41 项新增验收、修复清单和证据见 [最终验收报告](docs/最终验收报告.md)。完整课程实践报告的个人信息、小结与答辩准备仍需小组完成。
 
 以下命令在项目根目录执行。Python 3.11+；运行时使用标准库，pytest 用于测试。
 课程目标是贯通 SQL → Token → AST → 语义检查 → 计划 → 执行器 → 缓存/页 → 磁盘。
@@ -33,7 +33,7 @@ Token/AST/执行计划分析及真实缓存统计。示例仅填入编辑器，�
 .\.venv\Scripts\python.exe -m minisql.gui --data-dir .\data\practice --port 8767
 ```
 
-详见 [图形工作台使用说明](docs/图形工作台.md)。本次 GUI 交付全套测试 **566 项通过**，浏览器操作验收通过。
+详见 [图形工作台使用说明](docs/图形工作台.md)。当前 GUI 两套浏览器验收通过，含 52 行六页浏览、登录改密、EXPLAIN、事务及文件操作；证据见最终验收报告。
 
 ![MiniSQL 图形工作台](docs/assets/gui-workbench.png)
 
@@ -166,7 +166,7 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 - 支持 `BEGIN`、`COMMIT`、`ROLLBACK`，默认每条 SQL 自动提交；支持多个连接和进程串行访问同一数据库。
 - 支持 `CREATE TABLE`、`INSERT`、单表 `SELECT`、`DELETE`、`UPDATE`、`DROP TABLE`，以及过滤、投影、`SELECT *`、`SELECT DISTINCT` 去重、`ORDER BY` 排序和 `LIMIT`/`OFFSET` 截断分页。
 - **SQL 扩展（2026-09-11 由成员三接通执行）**：多表连接（INNER/LEFT/RIGHT/CROSS）、聚合与分组（COUNT/SUM/AVG/MAX/MIN + GROUP BY/HAVING）、子查询（标量/IN/EXISTS，含相关子查询）、集合操作（UNION/UNION ALL/INTERSECT/EXCEPT）、FROM 派生表、表/列别名与计算列、视图（CREATE/DROP VIEW 与依赖保护）、触发器（AFTER 行级，NEW/OLD，递归拒绝）、约束（PRIMARY KEY/UNIQUE/NOT NULL/CHECK/DEFAULT，FOREIGN KEY 写入与父行保护）、`ALTER TABLE`（增删列/重命名/改类型，接成员二整表重写）、索引（CREATE/DROP INDEX 单列与联合、唯一索引、存量构建、增删改同步维护、索引查询计划）、用户与权限（CREATE/DROP USER、GRANT/REVOKE、登录与统一入口鉴权）。NULL 三值逻辑、DECIMAL 精确计算与动态类型字面量按编译契约执行。
-- 表列支持有符号 64 位 `INT`、`VARCHAR`、`DECIMAL(p,s)` 与日期时间类型；`BOOL` 仅用于表达式。
+- 表列支持有符号 64 位 `INT`、`VARCHAR`、`DECIMAL(p,s)`、`BOOL`、`DATE`、`TIME`、`TIMESTAMP`；新类型已通过真实 SQL 与重启验收。
 - 支持加减、比较、括号及 `NOT/AND/OR`；实现常量折叠、布尔化简并保留优化前后计划。
 - 优化器对恒真 `WHERE` 消除 Filter，对恒假 `WHERE` 生成空结果计划（不扫描用户表，SELECT 保留结果列、DELETE 零影响行）。注意：事务整库前映像日志与缓存重建成本不因用户表扫描减少而降低，两者统计口径不同。
 - 支持只读 `EXPLAIN`，仅渲染优化后计划树、不扫描或修改数据；运行时加减检查有符号 64 位越界并报 `INTEGER_OUT_OF_RANGE`。
@@ -174,10 +174,10 @@ WHERE 左括号与运算符合计最多 64 个，超限返回带位置的 `EXPRE
 - SQL 必须以分号结束；单行 `INSERT` 必须列出全部列，允许重排。支持 `--` 和非嵌套 `/* */` 注释。
 - 使用 4KB 页、LRU/FIFO 缓存、脏页写回；表结构和记录持久化，支持正常重启及写前回滚日志恢复。
 - DELETE 后自动整理页内记录并回收空间，插入优先复用空槽和空闲空间；存活记录的 RecordId 保持不变。空页留给同表复用，数据库文件不主动缩小；DROP TABLE 才释放整表页供其他表复用。
-- 鉴权采用"初始化模式"：库中无账户时不强制；创建首个账户后自动成为管理员，此后所有 SQL 需先登录（CLI 用 `--user/--password`，图形工作台右上角「登录」按钮）。运行时新错误码：NOT_NULL_VIOLATION、DUPLICATE_KEY、CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN、LOGIN_FAILED；`ALTER USER` 仍为待接入项。
+- 鉴权采用"初始化模式"：库中无账户时不强制；创建首个账户后自动成为管理员，此后所有 SQL 需先登录（CLI 用 `--user/--password`，图形工作台右上角「登录」按钮）。运行时新错误码：NOT_NULL_VIOLATION、DUPLICATE_KEY、CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN、LOGIN_FAILED；`ALTER USER` 支持本人改密及管理员重设密码，并使旧会话失效。
 - 事务采用整库独占锁与完整文件前映像日志，不支持行锁、MVCC、嵌套事务或保存点。
 
-待办包括报告复核、测试截图和答辩材料整理。
+最终软件验收报告、当前界面截图和性能证据已提供；课程报告整合与答辩准备仍需完成。
 
 ## 文档与负责人
 

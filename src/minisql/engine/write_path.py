@@ -152,7 +152,8 @@ class WritePathMixin:
         self._require_permission(permission, "table", table)
 
     def _table_schema(self, name: str) -> TableSchema:
-        schema = self.catalog.get_table(name)
+        reader = getattr(self, "catalog_view", None) or self.catalog
+        schema = reader.get_table(name)
         if schema is None:
             raise _write_error("UNKNOWN_TABLE", name)
         return schema
@@ -175,7 +176,7 @@ class WritePathMixin:
 
     # ---------- 约束检查 ----------
 
-    def _check_constraints(self, schema, row, skip_row=None):
+    def _check_constraints(self, schema, row, *, final_rows=None, row_index=None):
         """写入前检查：NOT NULL、主键/唯一、CHECK（仅 FALSE 违规）、外键 MATCH SIMPLE。"""
         columns = [column.name for column in schema.columns]
         for position, column in enumerate(schema.columns):
@@ -193,10 +194,12 @@ class WritePathMixin:
                         raise _write_error("NOT_NULL_VIOLATION",
                                            f"主键 {constraint.name} 不允许 NULL")
                     continue  # UNIQUE 允许含 NULL 的重复键
-                for record in self.storage.scan(schema):
-                    if skip_row is not None and tuple(record.row) == tuple(skip_row):
+                candidates = (final_rows if final_rows is not None else
+                              [record.row for record in self.storage.scan(schema)])
+                for position, candidate in enumerate(candidates):
+                    if final_rows is not None and position == row_index:
                         continue
-                    if tuple(record.row[index] for index in indexes) == key:
+                    if tuple(candidate[index] for index in indexes) == key:
                         raise _write_error("DUPLICATE_KEY",
                                            f"违反唯一性约束：{constraint.name}")
             elif kind == "CHECK":
@@ -215,12 +218,14 @@ class WritePathMixin:
                                        f"引用表不存在：{constraint.reference_table}")
                 parent_columns = [column.name for column in parent.columns]
                 ref_indexes = [parent_columns.index(name) for name in constraint.reference_columns]
-                if not any(tuple(record.row[index] for index in ref_indexes) == key
-                           for record in self.storage.scan(parent)):
+                parent_rows = (final_rows if parent.name == schema.name and final_rows is not None
+                               else [record.row for record in self.storage.scan(parent)])
+                if not any(tuple(candidate[index] for index in ref_indexes) == key
+                           for candidate in parent_rows):
                     raise _write_error("FOREIGN_KEY_VIOLATION",
                                        f"违反外键约束：{constraint.name}")
 
-    def _check_parent_references(self, schema, row):
+    def _check_parent_references(self, schema, row, *, final_rows=None):
         """删除/更新父行前检查子表外键引用（首版拒绝破坏引用，不隐式级联）。"""
         if self.objects is None:
             return
@@ -237,8 +242,14 @@ class WritePathMixin:
             key = tuple(row[index] for index in parent_indexes)
             if any(value is None for value in key):
                 continue
-            for record in self.storage.scan(child):
-                if tuple(record.row[index] for index in child_indexes) == key:
+            if final_rows is not None and any(
+                    tuple(candidate[index] for index in parent_indexes) == key
+                    for candidate in final_rows):
+                continue  # 最终状态仍有被引用键；非键更新和合法键交换不破坏引用。
+            child_rows = (final_rows if child.name == schema.name and final_rows is not None
+                          else [record.row for record in self.storage.scan(child)])
+            for candidate in child_rows:
+                if tuple(candidate[index] for index in child_indexes) == key:
                     raise _write_error("FOREIGN_KEY_VIOLATION",
                                        f"被引用行仍被 {constraint.name} 使用")
 
@@ -264,7 +275,7 @@ class WritePathMixin:
         for index_def in self._index_defs(schema):
             index = self._index_tree(schema, index_def)
             key = self._index_key(schema, index_def, row)
-            if index_def.unique and any(value is not None for value in key) and index.lookup(key):
+            if index_def.unique and all(value is not None for value in key) and index.lookup(key):
                 raise _write_error("DUPLICATE_KEY", f"违反唯一索引：{index_def.name}")
             index.insert(key, record_id)
             self.objects.set_index_root(index_def.name, index.root_page)
@@ -273,19 +284,6 @@ class WritePathMixin:
         for index_def in self._index_defs(schema):
             index = self._index_tree(schema, index_def)
             index.delete(self._index_key(schema, index_def, row), record_id)
-            self.objects.set_index_root(index_def.name, index.root_page)
-
-    def _index_update(self, schema, old_row, new_row, old_record_id, new_record_id):
-        for index_def in self._index_defs(schema):
-            old_key = self._index_key(schema, index_def, old_row)
-            new_key = self._index_key(schema, index_def, new_row)
-            if old_key == new_key:
-                continue
-            index = self._index_tree(schema, index_def)
-            index.delete(old_key, old_record_id)
-            if index_def.unique and any(value is not None for value in new_key) and index.lookup(new_key):
-                raise _write_error("DUPLICATE_KEY", f"违反唯一索引：{index_def.name}")
-            index.insert(new_key, new_record_id)
             self.objects.set_index_root(index_def.name, index.root_page)
 
     def _rebuild_indexes(self, schema, old_index_defs=()):
@@ -316,7 +314,7 @@ class WritePathMixin:
         seen: set = set()
         for record in self.storage.scan(schema):
             key = tuple(record.row[name_to_index[column]] for column in columns)
-            if unique and any(value is not None for value in key):
+            if unique and all(value is not None for value in key):
                 if key in seen:
                     raise _write_error("DUPLICATE_KEY", f"存量数据违反唯一索引：{name}")
                 seen.add(key)
@@ -326,6 +324,12 @@ class WritePathMixin:
             name, schema.name, tuple(columns), bool(unique), index.root_page))
 
     # ---------- DML ----------
+
+    def _coerce_write_row(self, schema, row):
+        """语义层允许 INT 提升为 DECIMAL；存储编码前落实该转换。"""
+        return tuple(Decimal(value) if column.data_type == DataType.DECIMAL and
+                     type(value) is int else value
+                     for column, value in zip(schema.columns, row))
 
     def _extended_insert(self, plan, outer=None):
         attributes = dict(plan.attributes)
@@ -340,7 +344,7 @@ class WritePathMixin:
                 values.append(provided[column.name])
             else:
                 values.append(self._default_value(schema, column))
-        row = tuple(values)
+        row = self._coerce_write_row(schema, values)
         self._check_constraints(schema, row)
         record_id = self.storage.insert(schema, row)
         self._index_insert(schema, row, record_id)
@@ -355,7 +359,9 @@ class WritePathMixin:
         value_exprs = plan.expressions[:len(names)]
         predicate = plan.expressions[len(names)] if attributes.get("has_where") else None
         replacements = []
-        for record in self.storage.scan(schema):
+        records = list(self.storage.scan(schema))
+        final_rows = [tuple(record.row) for record in records]
+        for row_index, record in enumerate(records):
             context = RowContext(RuntimeRow(self._row_dict(plan, record.row)), outer)
             if predicate is not None and evaluate(predicate, context) is not True:
                 continue
@@ -363,13 +369,20 @@ class WritePathMixin:
             name_to_index = {column.name: i for i, column in enumerate(schema.columns)}
             for name, expression in zip(names, value_exprs):
                 row[name_to_index[name]] = evaluate(expression, context)
-            replacements.append((record.record_id, tuple(record.row), tuple(row)))
+            new_row = self._coerce_write_row(schema, row)
+            final_rows[row_index] = new_row
+            replacements.append((record.record_id, tuple(record.row), new_row))
+        for row_index, new_row in enumerate(final_rows):
+            self._check_constraints(schema, new_row, final_rows=final_rows, row_index=row_index)
         for old_record_id, old_row, new_row in replacements:
-            self._check_constraints(schema, new_row, skip_row=old_row)
-            self._check_parent_references(schema, old_row)
-            new_record_id = self.storage.insert(schema, new_row)
+            self._check_parent_references(schema, old_row, final_rows=final_rows)
+        # 先移除整批旧索引键，再写入新键，避免把合法交换误判为重复。
+        for old_record_id, old_row, _ in replacements:
+            self._index_delete(schema, old_row, old_record_id)
             self.storage.delete(schema, old_record_id)
-            self._index_update(schema, old_row, new_row, old_record_id, new_record_id)
+        for _, _, new_row in replacements:
+            new_record_id = self.storage.insert(schema, new_row)
+            self._index_insert(schema, new_row, new_record_id)
         self.storage.flush()
         for _, old_row, new_row in replacements:  # 行级事件在语句自身写入完成后派发
             self._fire_triggers(schema, "UPDATE", old_row, new_row)
@@ -387,8 +400,11 @@ class WritePathMixin:
             context = RowContext(RuntimeRow(self._row_dict(plan, record.row)), outer)
             if evaluate(predicate, context) is True:
                 doomed.append(record)
+        doomed_ids = {record.record_id for record in doomed}
+        final_rows = [record.row for record in self.storage.scan(schema)
+                      if record.record_id not in doomed_ids]
         for record in doomed:
-            self._check_parent_references(schema, record.row)
+            self._check_parent_references(schema, record.row, final_rows=final_rows)
             self.storage.delete(schema, record.record_id)
             self._index_delete(schema, record.row, record.record_id)
         self.storage.flush()
@@ -473,12 +489,19 @@ class WritePathMixin:
     # ---------- DDL ----------
 
     def _extended_create_table(self, plan):
-        from minisql.engine.objects import ConstraintDefinition
         self._require_objects()
         attributes = dict(plan.attributes)
         schema = attributes["schema"]
         assigned = self.storage.create_table(schema)
         self.catalog.register_table(assigned)
+        self._save_constraints(schema)
+        self.storage.flush()
+        return ExecutionResult(message=f"表 {assigned.name} 已创建")
+
+    def _save_constraints(self, schema):
+        """完整保存编译器确认的约束，供重开及后续写入使用。"""
+        from minisql.engine.objects import ConstraintDefinition
+        self.objects.unregister_constraints(schema.name)
         for position, column in enumerate(schema.columns):
             if not column.nullable:
                 self.objects.register_constraint(ConstraintDefinition(
@@ -495,8 +518,6 @@ class WritePathMixin:
                 expression=expression,
                 reference_table=constraint.reference_table or "",
                 reference_columns=constraint.reference_columns or ()))
-        self.storage.flush()
-        return ExecutionResult(message=f"表 {assigned.name} 已创建")
 
     def _extended_alter_table(self, plan):
         self._require_objects()
@@ -519,31 +540,19 @@ class WritePathMixin:
                 dropped = next(name for name in old_columns if name not in new_columns)
                 position = old_columns.index(dropped)
                 return tuple(value for index, value in enumerate(row) if index != position)
-            # RENAME COLUMN / RENAME TO / ALTER COLUMN TYPE：值按位置保持（类型转换在编码时校验）
-            return tuple(row)
+            # 按新类型完成无损整数提升，其余不兼容转换仍由编码器拒绝。
+            return self._coerce_write_row(new_schema, row)
 
         old_index_defs = self._index_defs(old_schema)
-        added_columns = [column for column in new_schema.columns
-                         if column.name not in old_columns]
         assigned = self.storage.rewrite_table(old_schema, new_schema, transform)
         self.catalog.unregister_table(old_schema.name)
         self.catalog.register_table(assigned)
-        # 新增列的非空/默认值登记持久化（供后续写入与目录补全使用）
-        from minisql.engine.objects import ConstraintDefinition
-        for column in added_columns:
-            if not column.nullable:
-                self.objects.register_constraint(ConstraintDefinition(
-                    new_schema.name, f"__notnull_{column.name}", "NOT NULL", (column.name,)))
-            if column.has_default and column.default is not None:
-                self.objects.register_constraint(ConstraintDefinition(
-                    new_schema.name, f"__default_{column.name}", "DEFAULT", (column.name,),
-                    default_text=serialize_expr(column.default)))
-        # 约束维护：被删除/重命名的列上的约束移除（保守，不自动改写 CHECK）
-        for constraint in self.objects.get_constraints(old_schema.name):
-            missing = [name for name in constraint.columns
-                       if name not in new_columns]
-            if missing:
-                self.objects.unregister_constraints(old_schema.name, constraint.name)
+        if old_schema.name != assigned.name:
+            self.objects.unregister_constraints(old_schema.name)
+        self._save_constraints(assigned)
+        final_rows = [record.row for record in self.storage.scan(assigned)]
+        for row_index, row in enumerate(final_rows):
+            self._check_constraints(assigned, row, final_rows=final_rows, row_index=row_index)
         self._rebuild_indexes(assigned, old_index_defs)
         self.storage.flush()
         return ExecutionResult(message=f"表 {old_schema.name} 已完成 {action}")

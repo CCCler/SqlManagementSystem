@@ -1,0 +1,36 @@
+== 1. 执行 core.sql（建表 -> 插入 -> 查询 -> 删除 -> 再查） ==
+表 student 已创建
+已插入 1 行
+已插入 1 行
+id | name
+---+------
+1  | Alice
+已删除 1 行
+id | name
+---+-----
+2  | Bob
+
+== 2. 关闭后重新打开查询（持久化验证，预期只剩 Bob） ==
+id | name
+---+-----
+2  | Bob
+
+== 3. 事务回滚演示（插入 Carol 后回滚，预期仍只剩 Bob） ==
+事务已开始
+已插入 1 行
+事务已回滚
+id | name
+---+-----
+2  | Bob
+
+== 4. 错误诊断演示（查询不存在的列，预期 UNKNOWN_COLUMN） ==
+[stderr] 错误: semantic:UNKNOWN_COLUMN at 1:8: 未知列：missing
+（预期错误 UNKNOWN_COLUMN 诊断正确）
+
+== 5. 删表与同名重建（重启后保持，预期新表只有 Alice） ==
+表 student 已删除
+表 student 已创建
+已插入 1 行
+id | name
+---+------
+1  | Alice

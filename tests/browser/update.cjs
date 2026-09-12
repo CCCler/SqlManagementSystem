@@ -77,8 +77,8 @@ const originReady = new Promise((resolve,reject) => {
   await page.waitForFunction(()=>document.querySelector('#login-button').textContent.includes('admin'));
   await run('SELECT * FROM t;');
   assert.deepEqual(errors,[]);
-  await page.screenshot({path:path.join(directory,'update.png'),fullPage:true});
-  console.log('UPDATE browser checks passed: affected rows, highlight, compilation, query, escaping, rollback, errors.');
+  await page.screenshot({path:path.join(root,'docs/assets/final-gui-login.png'),fullPage:true});
+  console.log('UPDATE browser checks passed: affected rows, highlight, compilation, query, escaping, rollback, errors, EXPLAIN, login, password change, session invalidation.');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
   if(browser)await browser.close();
   service.kill();

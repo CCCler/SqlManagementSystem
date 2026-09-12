@@ -30,7 +30,7 @@ def measure_query(database, sql, *, peak_memory=False):
     original_scan = HeapStorage.scan
 
     def counting_scan(self, schema):
-        if schema.table_id == 0:
+        if schema.table_id == 0 or schema.name.startswith("__"):
             yield from original_scan(self, schema)  # 系统目录表的读取不计入扫描行数。
             return
         for record in original_scan(self, schema):

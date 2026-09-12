@@ -382,8 +382,15 @@ class BTreeIndex:
     def range_scan(self, lo: tuple[Value, ...] | None,
                    hi: tuple[Value, ...] | None,
                    lo_inclusive: bool = True, hi_inclusive: bool = True) -> list[RecordId]:
-        lo_key = self.codec.encode(lo) if lo is not None else None
-        hi_key = self.codec.encode(hi) if hi is not None else None
+        def boundary(values):
+            if values is None:
+                return None
+            if not 1 <= len(values) <= len(self.codec.columns):
+                raise _error("INVALID_RECORD", "索引边界必须为非空的最左列前缀")
+            return KeyCodec(self.codec.columns[:len(values)]).encode(values)
+
+        lo_key = boundary(lo)
+        hi_key = boundary(hi)
         start_key = lo_key + MIN_RID_BYTES if lo_key is not None else None
         result: list[RecordId] = []
         page_id = self._leftmost_leaf() if start_key is None else self._find_leaf(start_key)
@@ -391,9 +398,10 @@ class BTreeIndex:
             node = self._decode_node(page_id)
             for entry in node.entries:
                 entry_key = entry[:-RID_STRUCT.size]
-                if lo_key is not None and (entry_key < lo_key or (not lo_inclusive and entry_key == lo_key)):
+                if lo_key is not None and (entry_key < lo_key or (not lo_inclusive and entry_key.startswith(lo_key))):
                     continue
-                if hi_key is not None and (entry_key > hi_key or (not hi_inclusive and entry_key == hi_key)):
+                if hi_key is not None and ((entry_key > hi_key and not entry_key.startswith(hi_key)) or
+                                           (not hi_inclusive and entry_key.startswith(hi_key))):
                     return result
                 result.append(decode_rid(entry))
             page_id = node.next_leaf

@@ -436,25 +436,30 @@ class PlanExecutor(WritePathMixin):
         lo: list = []
         hi: list = []
         lo_inclusive = hi_inclusive = True
-        for column_name, operator, literal_expr in attributes.get("bounds") or ():
-            value = evaluate(literal_expr, RowContext(RuntimeRow()))
+        bounds = attributes.get("bounds") or ()
+        for column_name in index_def.columns:
             column = key_columns.get(column_name)
-            if operator == "=":
+            matches = [(operator, evaluate(expression, RowContext(RuntimeRow())))
+                       for name, operator, expression in bounds if name == column_name]
+            equal = next((value for operator, value in matches if operator == "="), None)
+            if equal is not None:
+                value = equal
                 lo.append(_coerce_index_bound(column, value, "="))
                 hi.append(_coerce_index_bound(column, value, "="))
-            elif operator in (">", ">="):
-                lo.append(_coerce_index_bound(column, value, "lo"))
-                lo_inclusive = operator == ">="
-                break
-            else:
-                hi.append(_coerce_index_bound(column, value, "hi"))
-                hi_inclusive = operator == "<="
-                break
+                continue
+            lower = next(((op, value) for op, value in matches if op in (">", ">=")), None)
+            upper = next(((op, value) for op, value in matches if op in ("<", "<=")), None)
+            if lower:
+                lo.append(_coerce_index_bound(column, lower[1], "lo"))
+                lo_inclusive = lower[0] == ">="
+            if upper:
+                hi.append(_coerce_index_bound(column, upper[1], "hi"))
+                hi_inclusive = upper[0] == "<="
+            break  # 后续列与重复条件由完整 Filter 检查。
         record_ids = index.range_scan(tuple(lo) or None, tuple(hi) or None,
                                       lo_inclusive, hi_inclusive)
-        by_id = {record.record_id: tuple(record.row) for record in self.storage.scan(schema)}
-        rows = [RuntimeRow({values_key: by_id[rid]} if values_key else {})
-                for rid in record_ids if rid in by_id]
+        rows = [RuntimeRow({values_key: tuple(self.storage.fetch(schema, rid).row)} if values_key else {})
+                for rid in record_ids]
         return rows, plan.output, []
 
     def _table_schema_for_scan(self, name):
@@ -519,7 +524,10 @@ class PlanExecutor(WritePathMixin):
         right_rows, _, _ = self._extended_node(plan.children[1], outer, cursor)
 
         def values_of(row):
-            return row.output if row.output is not None else tuple(next(iter(row.values.values()), ()))
+            from decimal import Decimal
+            values = row.output if row.output is not None else tuple(next(iter(row.values.values()), ()))
+            return tuple(Decimal(value) if field.type.kind == "DECIMAL" and type(value) is int
+                         else value for field, value in zip(plan.output, values))
 
         left_values = [values_of(row) for row in left_rows]
         right_values = [values_of(row) for row in right_rows]
@@ -534,7 +542,8 @@ class PlanExecutor(WritePathMixin):
             combined = _dedupe([value for value in left_values if value not in right_set])
         else:
             raise _execution_error("FEATURE_NOT_EXECUTABLE", f"集合操作 {kind} 的执行尚未接入")
-        return [RuntimeRow(output=value) for value in combined], plan.output, []
+        scope = dict(plan.attributes).get("output_scope")
+        return [RuntimeRow(values={(scope, 0): value}, output=value) for value in combined], plan.output, []
 
     def _run_subquery_values(self, plan, context):
         """子查询执行器：以给定上下文为外层，返回投影值元组列表（相关绑定回溯）。"""

@@ -1,0 +1,29 @@
+{
+  "package": "minisql_course-0.1.0-py3-none-any.whl",
+  "isolated_import": true,
+  "static_resources": 4,
+  "database_index_query": "passed",
+  "entrypoints": [
+    {
+      "args": [
+        "minisql",
+        "--help"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "minisql",
+        "--version"
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "minisql.gui",
+        "--help"
+      ],
+      "exit_code": 0
+    }
+  ]
+}
