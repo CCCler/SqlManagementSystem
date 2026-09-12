@@ -21,7 +21,7 @@ PERMISSIONS = (
     "CREATE INDEX", "CREATE VIEW", "CREATE TRIGGER",
 )
 
-OBJECT_KINDS = ("table", "view")
+OBJECT_KINDS = ("table", "view", "database", "index", "trigger")
 
 
 def generate_salt() -> bytes:
@@ -95,6 +95,13 @@ class AccountStore:
             raise MiniSQLError(ErrorStage.EXECUTION, "UNKNOWN_PERMISSION", permission)
         if object_kind not in OBJECT_KINDS:
             raise MiniSQLError(ErrorStage.EXECUTION, "UNKNOWN_OBJECT_KIND", object_kind)
+        valid = {
+            "database": {"CREATE TABLE", "CREATE INDEX", "CREATE VIEW", "CREATE TRIGGER"},
+            "table": {"SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"},
+            "view": {"SELECT", "DROP"}, "index": {"DROP"}, "trigger": {"DROP"},
+        }
+        if permission not in valid[object_kind]:
+            raise MiniSQLError(ErrorStage.EXECUTION, "UNKNOWN_PERMISSION", "权限与对象不匹配")
         key = (user.lower(), object_kind, object_name.lower())
         self.grants.setdefault(key, set()).add(permission)
 

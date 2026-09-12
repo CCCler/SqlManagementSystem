@@ -79,6 +79,17 @@ class PersistentCatalog:
         """按名字查找，含登记在 __catalog 中的系统表（迁移工具等需要）。"""
         return self.tables.get(name.lower())
 
+    def get_view(self, name):
+        objects = getattr(self, 'objects', None)
+        if objects is None:
+            from minisql.contracts.errors import MiniSQLError, ErrorStage
+            raise MiniSQLError(ErrorStage.SEMANTIC, 'CATALOG_CAPABILITY_UNAVAILABLE', '对象目录尚未接入')
+        view = objects.get_view(name)
+        if view is None:
+            return None
+        from minisql.contracts.extensions import ViewDefinition
+        return ViewDefinition(view.name, view.definition, tuple(c.name for c in view.columns))
+
     def _resolve_internal(self, name: str) -> TableSchema | None:
         """对象系统表解析入口；与 get_table 同源，语义上仅供引擎内部使用。"""
         return self.tables.get(name.lower())

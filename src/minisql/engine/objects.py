@@ -8,6 +8,8 @@
 对象读写 API 的语义与 tests/fakes/extension.py 的内存替身一致（见
 docs/SQL扩展接口示例-成员三.md），契约测试对双实现并行验证。"""
 from dataclasses import dataclass, replace
+import json
+from minisql.engine.catalog import _column_type_text, _restore_column
 
 from minisql.contracts.errors import ErrorStage, MiniSQLError
 from minisql.contracts.interfaces import RecordStorage
@@ -159,7 +161,7 @@ class PersistentObjectCatalog:
             view_id, name, definition, column_index, column_name, column_type = record.row
             definitions.setdefault(view_id, (name, definition))
             columns_by_view.setdefault(view_id, {})[column_index] = (
-                ColumnSchema(column_name, DataType(column_type))
+                _restore_column(column_name, column_type)
             )
         for view_id, (name, definition) in definitions.items():
             columns = tuple(columns_by_view[view_id][index] for index in sorted(columns_by_view[view_id]))
@@ -176,7 +178,8 @@ class PersistentObjectCatalog:
         columns_by_index: dict[int, dict[int, str]] = {}
         meta_by_index: dict[int, tuple[str, str, bool, int]] = {}
         for record in self.storage.scan(self._table(INDEXES)):
-            index_id, name, table_name, unique_flag, column_index, column_name, root_page = record.row
+            row = record.row + (None,) if len(record.row) == 6 else record.row
+            index_id, name, table_name, unique_flag, column_index, column_name, root_page = row
             meta_by_index.setdefault(index_id, (name, table_name, bool(unique_flag), root_page))
             columns_by_index.setdefault(index_id, {})[column_index] = column_name
         for index_id, (name, table_name, unique, root_page) in meta_by_index.items():
@@ -191,7 +194,7 @@ class PersistentObjectCatalog:
             entry = pending.setdefault(key, {
                 "table": table_name, "name": name, "kind": kind, "indexes": [],
                 "expression": expression or "", "reference_table": reference_table or "",
-                "reference_columns": decode_name_list(reference_columns),
+                "reference_columns": reference_columns,
                 "default_text": default_text or "",
             })
             if column_index >= 0:
@@ -201,11 +204,22 @@ class PersistentObjectCatalog:
             if schema is None:
                 continue  # 表已删除的孤儿约束记录不恢复
             names = [column.name for column in schema.columns]
-            columns = tuple(names[index] for index in sorted(entry["indexes"]) if index < len(names))
+            columns = tuple(names[index] for index in entry["indexes"] if index < len(names))
+            encoded = entry["reference_columns"]
+            payload = json.loads(encoded) if encoded else []
+            if isinstance(payload, dict):
+                if payload.get('version') != 1 or not isinstance(payload.get('columns'), list) or not isinstance(payload.get('references'), list):
+                    raise _error('CORRUPT_CATALOG', '非法约束列顺序记录')
+                columns = tuple(payload['columns'])
+                references = tuple(payload['references'])
+                if any(not isinstance(n, str) for n in columns + references):
+                    raise _error('CORRUPT_CATALOG', '非法约束列名称')
+            else:
+                references = decode_name_list(encoded)
             constraint = ConstraintDefinition(
                 entry["table"], entry["name"], entry["kind"], columns,
                 entry["expression"], entry["reference_table"],
-                entry["reference_columns"], entry["default_text"])
+                references, entry["default_text"])
             constraints.setdefault(table_key, {})[entry["name"].lower()] = constraint
 
         deps: dict[tuple[str, str], set[tuple[str, str]]] = {}
@@ -227,8 +241,9 @@ class PersistentObjectCatalog:
             raise _error("INVALID_RECORD", f"视图 {view.name} 缺少输出列")
         table = self._table(VIEWS)
         view_id = _next_id(self.storage, table)
+        types = tuple(_column_type_text(c) for c in view.columns)
         for index, column in enumerate(view.columns):
-            self.storage.insert(table, (view_id, key, view.definition, index, column.name, column.data_type.value))
+            self.storage.insert(table, (view_id, key, view.definition, index, column.name, types[index]))
         self.storage.flush()
         self._views[key] = ViewDefinition(key, view.definition, view.columns)
         self._view_ids[key] = view_id
@@ -294,6 +309,8 @@ class PersistentObjectCatalog:
         key = index.name.lower()
         if key in self._indexes:
             raise _error("DUPLICATE_OBJECT", f"索引 {index.name} 已存在")
+        if len(self._table(INDEXES).columns) == 6:
+            raise _error('CATALOG_UPGRADE_REQUIRED', '旧索引目录须显式升级后登记物理索引')
         if index.root_page is None:
             raise _error("INVALID_RECORD", f"索引 {index.name} 缺少 root_page，无法重开恢复")
         table = self._table(INDEXES)
@@ -352,7 +369,7 @@ class PersistentObjectCatalog:
         indexes = self._column_indexes(constraint.table, constraint.columns)
         rows_indexes = indexes if indexes else (-1,)
         table = self._table(CONSTRAINTS)
-        reference_columns = encode_name_list(constraint.reference_columns)
+        reference_columns = json.dumps({"version": 1, "columns": list(constraint.columns), "references": list(constraint.reference_columns)}, ensure_ascii=False)
         for column_index in rows_indexes:
             self.storage.insert(table, (
                 table_key, column_index, name_key, constraint.kind, constraint.expression,
@@ -570,6 +587,27 @@ class PersistentAccountStore(AccountStore):
                           is_admin, iterations)
         self.add(account)
         return account
+
+    def change_password(self, session, name: str, password: str) -> None:
+        actor = self._account(session)
+        if actor is None or (not actor.is_admin and actor.name != name.lower()):
+            self.require_admin(session)
+        old = self.accounts.get(name.lower())
+        if old is None:
+            raise _error("UNKNOWN_USER", name)
+        salt = generate_salt()
+        # 新身份令所有旧登录会话失效，授权仍按账户名称保留。
+        account = Account(old.name, salt, derive_key(password, salt, old.iterations),
+                          old.is_admin, old.iterations)
+        table = self._table(USERS)
+        records = [record for record in self.storage.scan(table) if record.row[2] == old.name]
+        for record in records:
+            self.storage.delete(table, record.record_id)
+            self.storage.insert(table, (record.row[0], account.account_id, account.name,
+                encode_bytes(account.salt), encode_bytes(account.key), account.iterations,
+                int(account.is_admin)))
+        self.storage.flush()
+        self.accounts[old.name] = account
 
     def add(self, account: Account) -> None:
         super().add(account)  # 重复账户检查

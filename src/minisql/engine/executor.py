@@ -219,7 +219,7 @@ def render_plan(plan: Plan) -> str:
         from minisql.cli.trace import to_json_value
         import json
         from minisql.compiler.extended_optimizer import collect_capabilities
-        return "编译计划（执行待接入：" + ", ".join(collect_capabilities(plan)) + "）\n" + json.dumps(to_json_value(plan), ensure_ascii=False, indent=2)
+        return "编译计划（仅展示，不执行；所需能力：" + ", ".join(collect_capabilities(plan)) + "）\n" + json.dumps(to_json_value(plan), ensure_ascii=False, indent=2)
     if isinstance(plan, Explain):
         return render_plan(plan.plan)
     if isinstance(plan, SeqScan):

@@ -1,4 +1,4 @@
-"""真实数据库/GUI 保持旧业务语义，扩展计划只读展示并拒绝写入。"""
+"""真实数据库/GUI 保持旧业务语义，扩展计划只读展示与密码变更回归。"""
 import json
 import pytest
 from minisql.engine.database import open_database
@@ -10,20 +10,22 @@ from tests.fakes.memory import ExtendedMemoryCatalog
 @pytest.mark.parametrize('sql',[
  "ALTER USER alice IDENTIFIED BY 'newpw';",
 ])
-def test_guard_no_business_change(tmp_path,sql):
+def test_password_change_preserves_business_data(tmp_path,sql):
     db=open_database(tmp_path)
     try:
         db.execute('CREATE TABLE t(id INT); INSERT INTO t(id) VALUES (1);')
         db.execute("CREATE USER alice IDENTIFIED BY 'pw';")  # 初始化模式创建首个账户
         assert db.login('alice','pw')
         before=(tmp_path/'minisql.db').read_bytes()
-        with pytest.raises(MiniSQLError,match='FEATURE_NOT_EXECUTABLE'): db.execute(sql)
-        assert (tmp_path/'minisql.db').read_bytes()==before
+        db.execute(sql)
+        assert not db.login('alice','pw')
+        assert db.login('alice','newpw')
+        assert (tmp_path/'minisql.db').read_bytes()!=before
         assert db.execute('SELECT * FROM t;')[0].rows==((1,),)
     finally: db.close()
     db=open_database(tmp_path)
     try:
-        assert db.login('alice','pw')
+        assert db.login('alice','newpw')
         assert db.execute('SELECT * FROM t;')[0].rows==((1,),)
     finally: db.close()
 
@@ -50,7 +52,7 @@ def test_gui_explain_compiled_once(tmp_path):
         data=session.submit('execute',{'sql':'EXPLAIN UPDATE t SET id=id*2;'}).result()
         assert data['ok']
         assert len(data['compilations'])==1
-        assert '执行待接入' in data['results'][0]['message']
+        assert '仅展示，不执行' in data['results'][0]['message']
         assert data['compilations'][0]['required_capabilities']
         data=session.submit('execute',{'sql':'SELECT * FROM t;'}).result()
         assert data['results'][0]['rows']==[[1]]

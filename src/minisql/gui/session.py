@@ -66,7 +66,7 @@ class Session:
 
     def state(self):
         return {"connected": self.db is not None, "directory": str(self.path),
-                "user": (self.db.session.account if self.db and self.db.session else None),
+                "user": (self.db.session.account if self.db and self.db.accounts._account(self.db.session) else None),
                 "tables": to_json_value(self.db.catalog.list_tables()) if self.db else [],
                 "in_transaction": bool(self.db and self.db.in_transaction),
                 "transaction_failed": self.failed}

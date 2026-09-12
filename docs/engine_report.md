@@ -194,4 +194,9 @@ CHECK_VIOLATION、FOREIGN_KEY_VIOLATION、DIVISION_BY_ZERO、
 SUBQUERY_MULTIPLE_ROWS、NOT_LOGGED_IN、INVALID_CONSTRAINT。
 
 **验收**：扩展查询/DDL/触发器/鉴权共 40 余项专项测试；全套 982 项通过、零跳过。
-未接入项：`ALTER USER`（重设密码）仍受 FEATURE_NOT_EXECUTABLE 屏障。
+该轮时 `ALTER USER` 尚未接通；后续已完成修改密码、会话失效和持久化回归，见 `SQL扩展最新验收.md`。
+
+
+## 8. 执行接入修复（2026-09-12）
+
+嵌套子查询权限遍历、数据库及对象权限范围、视图 DECIMAL 参数、ALTER USER 和 EXPLAIN 状态已修复。普通用户仅可修改本人密码，管理员可重设他人密码；密码变更使旧会话失效，事务回滚保留原密码。查询视图同时检查视图和底层对象授权。详细案例与 1011 项全套测试、浏览器验证见 `SQL扩展最新验收.md`。

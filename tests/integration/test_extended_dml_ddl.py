@@ -277,7 +277,7 @@ def test_view_inherits_caller_permissions(db):
     assert error.value.code == "PERMISSION_DENIED"
     db.logout()
     assert db.login("admin", "rootpw")
-    db.execute("GRANT SELECT ON TABLE secret TO alice;")
+    db.execute("GRANT SELECT ON TABLE secret TO alice; GRANT SELECT ON VIEW v TO alice;")
     db.logout()
     assert db.login("alice", "pw")
     assert rows(db, "SELECT id FROM v;") == ((1,),)

@@ -13,6 +13,7 @@ class SQLCompiler:
         from minisql.compiler.catalog import ReadOnlyCatalogAdapter
         catalog = ReadOnlyCatalogAdapter(catalog)
         tokens = Lexer().tokenize(sql)
+        catalog.positions = {t.lexeme.lower(): t.position for t in reversed(tokens)}
         ast = Parser().parse(tokens)
         from minisql.compiler.capabilities import needs_extended
         from minisql.contracts.ast import ExplainStmt

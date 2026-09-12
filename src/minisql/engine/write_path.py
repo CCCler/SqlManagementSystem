@@ -73,17 +73,31 @@ class WritePathMixin:
         """统一入口检查：按计划收集所需的表级权限，覆盖查询/写入/DDL 与视图展开。"""
         if not self._enforcing():
             return
-        from minisql.contracts.extensions import ExtendedPlan
+        from minisql.contracts.extensions import Expr, ExtendedPlan
         from minisql.contracts.plans import (
             CreateTable as LegacyCreate, Delete as LegacyDelete, DropTable as LegacyDrop,
             Explain as LegacyExplain, Filter, Insert as LegacyInsert, Project,
             EmptyScan, QueryPlan, SeqScan, Update as LegacyUpdate,
         )
 
-        permissions: dict[tuple[str, str], str] = {}
+        if self.accounts._account(getattr(self, "session", None)) is None:
+            raise _write_error("PERMISSION_DENIED", "会话已失效，请重新登录")
+        permissions = set()
 
-        def need(permission, table):
-            permissions[(permission, table.lower())] = permission
+        def need(permission, name, kind="table"):
+            permissions.add((permission, kind, name.lower()))
+
+        def visit_value(value):
+            if isinstance(value, ExtendedPlan):
+                visit(value)
+            elif isinstance(value, Expr):
+                visit_value(value.args)
+            elif isinstance(value, (tuple, list)):
+                for item in value:
+                    visit_value(item)
+            elif isinstance(value, dict):
+                for item in value.values():
+                    visit_value(item)
 
         def visit(node):
             if isinstance(node, ExtendedPlan):
@@ -91,17 +105,20 @@ class WritePathMixin:
                 attributes = dict(node.attributes)
                 if operator in ("TableScan", "IndexScan"):
                     need("SELECT", attributes.get("table", ""))
+                elif operator == "ViewScan":
+                    need("SELECT", attributes["view"], "view")
+                elif operator in ("CreateTable", "CreateIndex", "CreateView", "CreateTrigger"):
+                    need(_OPERATOR_PERMISSIONS[operator], "main", "database")
+                elif operator in ("DropView", "DropIndex", "DropTrigger"):
+                    kind = operator[4:].lower()
+                    need("DROP", attributes.get(kind) or attributes.get("name"), kind)
                 elif operator in _OPERATOR_PERMISSIONS:
                     need(_OPERATOR_PERMISSIONS[operator], attributes.get("table", ""))
                 elif operator == "DropTable":
                     need("DROP", attributes.get("table", ""))
-                for child in node.children:
-                    if isinstance(child, ExtendedPlan):
-                        visit(child)
-                for expression in node.expressions:
-                    for arg in expression.args:
-                        if isinstance(arg, ExtendedPlan):
-                            visit(arg)
+                visit_value(node.children)
+                visit_value(node.expressions)
+                visit_value(node.attributes)
                 return
             if isinstance(node, SeqScan):
                 need("SELECT", node.schema.name)
@@ -120,15 +137,15 @@ class WritePathMixin:
                 need("DELETE", node.schema.name)
                 visit(node.source)
             elif isinstance(node, LegacyCreate):
-                need("CREATE TABLE", node.schema.name)
+                need("CREATE TABLE", "main", "database")
             elif isinstance(node, LegacyDrop):
                 need("DROP", node.schema.name)
             elif isinstance(node, LegacyExplain):
                 visit(node.plan)
 
         visit(plan)
-        for (permission, table) in permissions:
-            self.accounts.require(getattr(self, "session", None), permission, "table", table)
+        for permission, kind, name in sorted(permissions):
+            self.accounts.require(getattr(self, "session", None), permission, kind, name)
 
     def enforce_write_permission(self, permission, table):
         """行级写入与 DDL 处理器使用；表名统一小写。"""
@@ -588,7 +605,8 @@ class WritePathMixin:
         output = plan.output
         columns = tuple(
             __import__("minisql.contracts.models", fromlist=["ColumnSchema"]).ColumnSchema(
-                field.name, DataType(field.type.kind))
+                field.name, DataType(field.type.kind), field.type.precision, field.type.scale,
+                nullable=field.type.nullable)
             for field in output)
         self.objects.register_view(ViewDefinition(name, definition, columns))
         for dependency in plan.dependencies:
@@ -622,6 +640,11 @@ class WritePathMixin:
             else:
                 self.accounts.create_account(name, plan.password, is_admin=True)
             return ExecutionResult(message=f"账户 {name} 已创建")
+        if operator == "AlterUser":
+            if plan.password is None:
+                raise _write_error("INVALID_PASSWORD", "修改密码必须提供密码")
+            self.accounts.change_password(getattr(self, "session", None), name, plan.password)
+            return ExecutionResult(message=f"账户 {name} 密码已修改，请重新登录")
         if operator == "DropUser":
             self.accounts.require_admin(getattr(self, "session", None))
             self.accounts.remove_account(getattr(self, "session", None), name)

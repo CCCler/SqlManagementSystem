@@ -81,7 +81,7 @@ def test_unknown_user_and_unknown_permission():
         store.grant("alice", "FLY", "table", "t")
     assert error.value.code == "UNKNOWN_PERMISSION"
     with pytest.raises(MiniSQLError) as error:
-        store.grant("alice", "SELECT", "index", "t")
+        store.grant("alice", "SELECT", "role", "t")
     assert error.value.code == "UNKNOWN_OBJECT_KIND"
 
 
@@ -135,3 +135,12 @@ def test_authentication_uses_stored_parameters(iterations):
     session = store.authenticate("ALICE", "pw")
     assert session is not None and session.account_id == account.account_id
     assert store.authenticate("alice", "wrong") is None
+
+
+def test_index_authorization_accepts_drop_only():
+    store = AccountStore()
+    store.add(create_account("alice", "pw", iterations=ITERATIONS))
+    store.grant("alice", "DROP", "index", "idx")
+    store.require(store.authenticate("alice", "pw"), "DROP", "index", "idx")
+    with pytest.raises(MiniSQLError, match="UNKNOWN_PERMISSION"):
+        store.grant("alice", "SELECT", "index", "idx")

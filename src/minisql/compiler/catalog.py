@@ -6,6 +6,13 @@ class ReadOnlyCatalogAdapter:
 
     def __init__(self, catalog):
         self._catalog = catalog
+        self.positions = {}
+
+    def get_table(self, name):
+        if name.lower().startswith('__'):
+            from minisql.contracts.errors import MiniSQLError, ErrorStage
+            raise MiniSQLError(ErrorStage.SEMANTIC, 'PROTECTED_TABLE', 'SQL 不允许访问内部系统表', self.positions.get(name.lower()))
+        return self._catalog.get_table(name)
 
     def __getattr__(self, name):
         if name in self.METHODS:

@@ -100,16 +100,14 @@ def test_distinct_on_extended_projection(db):
     assert rows(db, "SELECT DISTINCT name FROM t WHERE id IN (1, 4);")[1] == (("a",),)
 
 
-def test_unsupported_operators_stay_gated(db):
-    """尚未接入的扩展（ALTER USER）仍被屏障拒绝，不会静默改动业务数据。"""
+def test_alter_user_changes_password(db):
+    """ALTER USER 更新认证密码，业务数据保持不变。"""
     from minisql.contracts.errors import ErrorStage
     db.execute("CREATE USER alice IDENTIFIED BY 'pw';")  # 初始化模式创建首个账户
     assert db.login("alice", "pw")
-    with pytest.raises(MiniSQLError) as error:
-        db.execute("ALTER USER alice IDENTIFIED BY 'newpw';")
-    assert error.value.code == "FEATURE_NOT_EXECUTABLE"
-    assert error.value.stage is ErrorStage.EXECUTION
-    assert db.login("alice", "pw")  # 原密码仍有效：账户未被改动
+    db.execute("ALTER USER alice IDENTIFIED BY 'newpw';")
+    assert not db.login("alice", "pw")
+    assert db.login("alice", "newpw")
     assert rows(db, "SELECT id FROM t;")[1] == ((1,), (2,), (3,))
 
 

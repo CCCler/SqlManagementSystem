@@ -93,6 +93,7 @@ class TransactionalDatabase(Database):
         self.objects = PersistentObjectCatalog(self.storage, self.catalog)
         self.accounts = PersistentAccountStore(self.storage, self.catalog)
         self.objects.bootstrap()
+        self.catalog.objects = self.objects
         self.accounts.bootstrap()
         self.catalog_view = ExtendedCatalogAdapter(self.catalog, self.objects, self.accounts)
         self.executor.objects = self.objects
@@ -165,11 +166,23 @@ class TransactionalDatabase(Database):
     def login(self, name: str, password: str) -> bool:
         """账户登录：成功后本连接以该身份执行，权限检查覆盖全部入口。"""
         with self._guard:
-            if self.accounts is None:
-                return False
-            self.session = self.accounts.authenticate(name, password)
-            self.executor.session = self.session
-            return self.session is not None
+            if self._closed or self._broken:
+                raise _transaction_error("CONNECTION_CLOSED", "连接已关闭")
+            if self._active and self._owner != threading.get_ident():
+                raise _transaction_error("TRANSACTION_OWNER", "显式事务必须由开始它的线程操作")
+            automatic = not self._active
+            if automatic:
+                self._start()  # 持锁重载，避免旧连接用已修改的密码重新认证。
+            try:
+                self.session = self.accounts.authenticate(name, password)
+                self.executor.session = self.session
+                if automatic:
+                    self._commit_locked()
+                return self.session is not None
+            except BaseException:
+                if automatic and self._active:
+                    self._rollback_locked()
+                raise
 
     def logout(self) -> None:
         with self._guard:
